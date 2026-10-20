@@ -1,0 +1,44 @@
+{
+  "name": "oil-hsse-app",
+  "version": "2.5.2",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build --webpack",
+    "start": "next start",
+    "lint": "eslint",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.116.0",
+    "@tanstack/react-virtual": "^3.14.13",
+    "@types/d3-scale": "^4.0.9",
+    "@types/three": "^0.186.0",
+    "animejs": "^4.5.0",
+    "d3-scale": "^4.0.2",
+    "gsap": "^3.15.0",
+    "lucide-react": "^1.43.0",
+    "motion": "^14.4.0",
+    "next": "16.3.4",
+    "papaparse": "^5.7.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-simple-maps": "^5.0.5",
+    "recharts": "^3.10.1",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/animejs": "^3.1.13",
+    "@types/node": "^20",
+    "@types/papaparse": "^5.5.2",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@types/react-simple-maps": "^3.0.6",
+    "eslint": "^9",
+    "eslint-config-next": "16.3.4",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.13",
+    "typescript": "^5"
+  }
+}
