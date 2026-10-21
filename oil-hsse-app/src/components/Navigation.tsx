@@ -35,7 +35,7 @@ export default function Navigation() {
   const pathname = usePathname();
   const router = useRouter();
   const { openIngestionModal } = useSafety();
-  const { session, role, switchRole, logout } = useAuth();
+  const { session, role, logout } = useAuth();
   const { timeFormat, setTimeFormat } = useTimeFormat();
   const [timeString, setTimeString] = useState('');
   const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
@@ -82,11 +82,6 @@ export default function Navigation() {
     { href: '/guidelines', label: 'Guidelines', icon: BookOpen },
     { href: '/chatbot', label: 'AI Chatbot', icon: Bot },
   ];
-
-  const handleRoleChange = (newRole: UserRole) => {
-    switchRole(newRole);
-    setIsRoleDropdownOpen(false);
-  };
 
   const handleLogout = () => {
     logout();
@@ -201,7 +196,7 @@ export default function Navigation() {
                     </span>
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1">
-                    {role === 'ADMIN' ? 'Chief HSSE Superintendent (Full Authority)' : 'Field Observer (Read-Only)'}
+                    {role === 'ADMIN' ? 'Admin' : 'User'}
                   </div>
                 </div>
 

@@ -21,7 +21,7 @@ ROLE_PROFILES = {
     "USER": {
         "userId": "a0000000-0000-0000-0000-000000000002",
         "name": "Standard User",
-        "designation": "HSSE Observer",
+        "designation": "Safety Officer",
         "email": "user@oilindia.in",
         "canConfirmEscalate": False,
         "canOverride": False,

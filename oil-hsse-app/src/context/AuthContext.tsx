@@ -2,7 +2,9 @@
 
 // ============================================================
 // OIL HSSE ENTERPRISE SIF-PRECURSOR DECISION-SUPPORT PLATFORM
-// Authentication & Role-Based Access Control Context (Prompt v2.0)
+// Authentication & Role-Based Access Control Context (v2.6.0 · PR2)
+// Strict State Machine: loading -> unauthenticated | authenticated
+// Zero Fallbacks, Zero Demo Sessions, Pure Supabase Database Roles
 // ============================================================
 
 import React, {
@@ -21,151 +23,176 @@ export interface UserProfile extends AuthSession {
   designation: string;
 }
 
-export const DEMO_PROFILES: Record<UserRole, UserProfile> = {
-  ADMIN: {
-    id: 'fbd8a83c-e15c-56f2-a1ac-14ea243c91e1',
-    name: 'Administrator (Demo)',
-    email: 'admin@oilindia.in',
-    role: 'ADMIN',
-    basin: 'Assam Operational Basin',
-    designation: 'Chief HSSE Superintendent',
-  },
-  USER: {
-    id: '2acac1cb-1849-54a5-85a4-d5f3ec547c03',
-    name: 'Standard User (Demo)',
-    email: 'user@oilindia.in',
-    role: 'USER',
-    basin: 'Assam Operational Basin',
-    designation: 'HSSE Observer',
-  },
-};
+export type AuthStatus = 'loading' | 'unauthenticated' | 'authenticated';
 
 interface AuthContextType {
   session: UserProfile | null;
-  role: UserRole;
+  role: UserRole | null;
+  authStatus: AuthStatus;
   isAuthenticated: boolean;
   isAuthLoading: boolean;
-  isRealAuthUser: boolean;
   loginWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   signUpWithEmail: (email: string, password: string, fullName: string) => Promise<{ success: boolean; error?: string; message?: string }>;
-  loginWithServerDemo: (requestedRole: UserRole) => Promise<{ success: boolean; error?: string }>;
-  loginWithDemo: (role: UserRole, customName?: string) => void;
-  login: (role: UserRole, customName?: string) => void; // Backwards-compatible alias
   logout: () => Promise<void>;
-  switchRole: (newRole: UserRole) => void;
   canEscalate: boolean;
   canOverride: boolean;
   canManageDatasets: boolean;
+  setupIncomplete: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const STORAGE_KEY = 'oil_hsse_auth_session';
+// Legacy storage keys from previous demo/offline attempts that must be purged
+const LEGACY_STORAGE_KEYS = [
+  'oil_hsse_auth_session',
+  'oil_hsse_demo_role',
+  'oil_hsse_user_role',
+  'demo_session',
+  'user_role',
+  'auth_session',
+];
+
+function purgeLegacyStorage() {
+  if (typeof window === 'undefined') return;
+  try {
+    for (const key of LEGACY_STORAGE_KEYS) {
+      localStorage.removeItem(key);
+      sessionStorage.removeItem(key);
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // Default to ADMIN for rich demo evaluation when no storage exists
-  const [session, setSession] = useState<UserProfile | null>(DEMO_PROFILES.ADMIN);
-  const [isAuthLoading, setIsAuthLoading] = useState(false);
-  const [isRealAuthUser, setIsRealAuthUser] = useState(false);
-  const [isInitialized, setIsInitialized] = useState(false);
+  // Strict initial state: Starts at null with loading true
+  const [session, setSession] = useState<UserProfile | null>(null);
+  const [authStatus, setAuthStatus] = useState<AuthStatus>('loading');
+  const [setupIncomplete, setSetupIncomplete] = useState<boolean>(false);
 
-  // Initialize session: Check Supabase session first, then localStorage
+  // Helper to fetch user profile strictly from public.profiles
+  const fetchProfile = useCallback(async (userId: string, userEmail: string): Promise<UserProfile | null> => {
+    const client = getSupabaseClient();
+    if (!client) return null;
+
+    try {
+      const { data: profile, error } = await client
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (error || !profile) {
+        console.warn('[AuthContext] Profile row unreadable or missing for authenticated user:', error);
+        return null;
+      }
+
+      // Role must strictly be ADMIN or USER
+      const dbRole: UserRole = profile.role === 'ADMIN' ? 'ADMIN' : profile.role === 'USER' ? 'USER' : 'USER';
+      const name = profile.full_name || profile.email?.split('@')[0] || userEmail.split('@')[0] || 'User';
+      const basin = profile.basin || 'Assam Operational Basin';
+      const designation = profile.designation || (dbRole === 'ADMIN' ? 'Chief HSSE Superintendent' : 'Safety Officer');
+
+      return {
+        id: userId,
+        name,
+        email: userEmail || profile.email || '',
+        role: dbRole,
+        basin,
+        designation,
+      };
+    } catch (err) {
+      console.warn('[AuthContext] Exception fetching profile from database:', err);
+      return null;
+    }
+  }, []);
+
+  // Initialize session on startup
   useEffect(() => {
     let isMounted = true;
+    purgeLegacyStorage();
 
     async function initAuth() {
       const client = getSupabaseClient();
-      if (client) {
-        try {
-          const { data: { session: sbSession } } = await client.auth.getSession();
-          if (sbSession?.user && isMounted) {
-            // Fetch profile for real user
-            const { data: profile } = await client
-              .from('profiles')
-              .select('*')
-              .eq('id', sbSession.user.id)
-              .maybeSingle();
-
-            const role: UserRole = profile?.role === 'ADMIN' ? 'ADMIN' : 'USER';
-            const name = profile?.full_name || sbSession.user.user_metadata?.full_name || sbSession.user.email?.split('@')[0] || 'User';
-            const basin = profile?.basin || 'Assam Operational Basin';
-            const designation = profile?.designation || (role === 'ADMIN' ? 'Chief HSSE Superintendent' : 'HSSE Observer');
-
-            const restored: UserProfile = {
-              id: sbSession.user.id,
-              name,
-              email: sbSession.user.email || '',
-              role,
-              basin,
-              designation,
-            };
-
-            setSession(restored);
-            setIsRealAuthUser(true);
-            setIsInitialized(true);
-            return;
-          }
-        } catch (e) {
-          console.warn('[AuthContext] Supabase session check error:', e);
+      if (!client) {
+        if (isMounted) {
+          setSession(null);
+          setAuthStatus('unauthenticated');
         }
+        return;
       }
 
-      // Check localStorage for demo or previously stored session
       try {
-        const stored = localStorage.getItem(STORAGE_KEY);
-        if (stored && isMounted) {
-          const parsed = JSON.parse(stored) as UserProfile;
-          if (parsed && (parsed.role === 'ADMIN' || parsed.role === 'USER')) {
-            setSession(parsed);
-            setIsRealAuthUser(Boolean(parsed.id && !parsed.id.startsWith('usr-') && parsed.id !== DEMO_PROFILES.ADMIN.id && parsed.id !== DEMO_PROFILES.USER.id));
+        const { data: { session: sbSession }, error: sessionError } = await client.auth.getSession();
+        if (sessionError || !sbSession?.user) {
+          if (isMounted) {
+            setSession(null);
+            setAuthStatus('unauthenticated');
           }
+          return;
         }
-      } catch {
-        // Fallback to default profile
-      } finally {
-        if (isMounted) setIsInitialized(true);
+
+        // Validate user against auth server (equivalent to getUser)
+        const { data: userData, error: userError } = await client.auth.getUser();
+        if (userError || !userData?.user) {
+          await client.auth.signOut();
+          if (isMounted) {
+            setSession(null);
+            setAuthStatus('unauthenticated');
+          }
+          return;
+        }
+
+        const profile = await fetchProfile(userData.user.id, userData.user.email || '');
+        if (!profile) {
+          // If there is an active session but the profile row is missing, refuse entry
+          console.warn('[AuthContext] User has valid auth session but no database profile. Signing out.');
+          await client.auth.signOut();
+          if (isMounted) {
+            setSetupIncomplete(true);
+            setSession(null);
+            setAuthStatus('unauthenticated');
+          }
+          return;
+        }
+
+        if (isMounted) {
+          setSession(profile);
+          setAuthStatus('authenticated');
+          setSetupIncomplete(false);
+        }
+      } catch (err) {
+        console.warn('[AuthContext] Auth initialization failed:', err);
+        if (isMounted) {
+          setSession(null);
+          setAuthStatus('unauthenticated');
+        }
       }
     }
 
     initAuth();
 
-    // Listen to Supabase auth events
+    // Listen to Supabase auth events (cross-tab sync, token expiration, sign-out)
     const client = getSupabaseClient();
     const { data: authListener } = client?.auth.onAuthStateChange(async (event, sbSession) => {
       if (!isMounted) return;
 
-      if (event === 'SIGNED_IN' && sbSession?.user) {
-        try {
-          const { data: profile } = await client!
-            .from('profiles')
-            .select('*')
-            .eq('id', sbSession.user.id)
-            .maybeSingle();
-
-          const role: UserRole = profile?.role === 'ADMIN' ? 'ADMIN' : 'USER';
-          const name = profile?.full_name || sbSession.user.user_metadata?.full_name || sbSession.user.email?.split('@')[0] || 'User';
-          const basin = profile?.basin || 'Assam Operational Basin';
-          const designation = profile?.designation || (role === 'ADMIN' ? 'Chief HSSE Superintendent' : 'HSSE Observer');
-
-          const userProfile: UserProfile = {
-            id: sbSession.user.id,
-            name,
-            email: sbSession.user.email || '',
-            role,
-            basin,
-            designation,
-          };
-
-          setSession(userProfile);
-          setIsRealAuthUser(true);
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(userProfile));
-          } catch {}
-        } catch (err) {
-          console.warn('[AuthContext] Auth state change profile fetch error:', err);
+      if (event === 'SIGNED_OUT' || !sbSession?.user) {
+        setSession(null);
+        setAuthStatus('unauthenticated');
+        purgeLegacyStorage();
+      } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') {
+        const profile = await fetchProfile(sbSession.user.id, sbSession.user.email || '');
+        if (!profile) {
+          await client?.auth.signOut();
+          setSetupIncomplete(true);
+          setSession(null);
+          setAuthStatus('unauthenticated');
+        } else {
+          setSession(profile);
+          setAuthStatus('authenticated');
+          setSetupIncomplete(false);
         }
-      } else if (event === 'SIGNED_OUT') {
-        setIsRealAuthUser(false);
       }
     }) || { data: { subscription: null } };
 
@@ -173,95 +200,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isMounted = false;
       authListener?.subscription?.unsubscribe();
     };
-  }, []);
-
-  const loginWithServerDemo = useCallback(async (requestedRole: UserRole): Promise<{ success: boolean; error?: string }> => {
-    setIsAuthLoading(true);
-    try {
-      const res = await fetch('/api/auth/demo', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role: requestedRole }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success || !data.session) {
-        throw new Error(data.error || 'Failed to establish server-authenticated demo session.');
-      }
-
-      // STRICT SECURITY: The session role is populated strictly from the server/DB response, NOT from client.
-      const serverSession: UserProfile = {
-        id: data.session.id,
-        name: data.session.name,
-        email: data.session.email,
-        role: data.session.role,
-        basin: data.session.basin || 'Assam Operational Basin',
-        designation: data.session.designation || (data.session.role === 'ADMIN' ? 'Chief HSSE Superintendent' : 'HSSE Observer'),
-      };
-
-      // Establish authenticated session with browser Supabase client
-      if (data.tokens?.access_token && data.tokens?.refresh_token) {
-        try {
-          const sb = getSupabaseClient();
-          if (sb) {
-            await sb.auth.setSession({
-              access_token: data.tokens.access_token,
-              refresh_token: data.tokens.refresh_token,
-            });
-          }
-        } catch (tokenErr) {
-          console.warn('[AuthContext] Error setting Supabase client session:', tokenErr);
-        }
-      }
-
-      setSession(serverSession);
-      setIsRealAuthUser(true);
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(serverSession));
-      } catch {}
-
-      return { success: true };
-    } catch (err: any) {
-      console.warn('[AuthContext] loginWithServerDemo network fallback:', err);
-      // Seamless graceful fallback if fetch fails
-      const baseProfile = DEMO_PROFILES[requestedRole] || DEMO_PROFILES.USER;
-      setSession(baseProfile);
-      setIsRealAuthUser(false);
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(baseProfile));
-      } catch {}
-      return { success: true };
-    } finally {
-      setIsAuthLoading(false);
-    }
-  }, []);
-
-  const loginWithDemo = useCallback((role: UserRole, customName?: string) => {
-    const baseProfile = DEMO_PROFILES[role] || DEMO_PROFILES.USER;
-    const newSession: UserProfile = {
-      ...baseProfile,
-      name: customName || baseProfile.name,
-    };
-    setSession(newSession);
-    setIsRealAuthUser(false);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newSession));
-    } catch {
-      // Ignore storage errors
-    }
-  }, []);
-
-  const login = loginWithDemo; // Backwards-compatible alias
+  }, [fetchProfile]);
 
   const loginWithEmail = async (
     email: string,
     password: string
   ): Promise<{ success: boolean; error?: string }> => {
-    setIsAuthLoading(true);
+    setAuthStatus('loading');
+    setSetupIncomplete(false);
     try {
       const client = getSupabaseClient();
       if (!client) {
-        return { success: false, error: 'Supabase authentication service is not configured.' };
+        setAuthStatus('unauthenticated');
+        return { success: false, error: 'Authentication service is currently unavailable.' };
       }
 
       const trimmedEmail = email.trim();
@@ -271,59 +222,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if (error) {
+        setSession(null);
+        setAuthStatus('unauthenticated');
         return { success: false, error: error.message };
       }
 
       if (!data.user) {
-        return { success: false, error: 'Authentication failed. No user returned.' };
+        setSession(null);
+        setAuthStatus('unauthenticated');
+        return { success: false, error: 'Authentication failed. No user record returned.' };
       }
 
-      // Fetch user profile from public.profiles
-      const { data: profile } = await client
-        .from('profiles')
-        .select('*')
-        .eq('id', data.user.id)
-        .maybeSingle();
-
-      // Strictly map role from database record; if missing, reject and sign out
+      // Fetch user profile strictly from public.profiles
+      const profile = await fetchProfile(data.user.id, data.user.email || trimmedEmail);
       if (!profile) {
         await client.auth.signOut();
         setSession(null);
-        setIsRealAuthUser(false);
-        try {
-          localStorage.removeItem(STORAGE_KEY);
-        } catch {}
+        setAuthStatus('unauthenticated');
+        setSetupIncomplete(true);
         return {
           success: false,
           error: 'Your account setup is incomplete. Please contact an administrator.',
         };
       }
 
-      const role: UserRole = profile.role === 'ADMIN' ? 'ADMIN' : 'USER';
-      const name = profile.full_name || data.user.user_metadata?.full_name || trimmedEmail.split('@')[0];
-      const basin = profile.basin || 'Assam Operational Basin';
-      const designation = profile.designation || (role === 'ADMIN' ? 'Chief HSSE Superintendent' : 'HSSE Observer');
-
-      const newSession: UserProfile = {
-        id: data.user.id,
-        name,
-        email: data.user.email || trimmedEmail,
-        role,
-        basin,
-        designation,
-      };
-
-      setSession(newSession);
-      setIsRealAuthUser(true);
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newSession));
-      } catch {}
-
+      setSession(profile);
+      setAuthStatus('authenticated');
+      purgeLegacyStorage();
       return { success: true };
     } catch (err: any) {
+      setSession(null);
+      setAuthStatus('unauthenticated');
       return { success: false, error: err.message || 'An unexpected error occurred during login.' };
-    } finally {
-      setIsAuthLoading(false);
     }
   };
 
@@ -332,25 +262,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     password: string,
     fullName: string
   ): Promise<{ success: boolean; error?: string; message?: string }> => {
-    setIsAuthLoading(true);
+    setAuthStatus('loading');
     try {
       const client = getSupabaseClient();
       if (!client) {
-        return { success: false, error: 'Supabase authentication service is not configured.' };
+        setAuthStatus('unauthenticated');
+        return { success: false, error: 'Authentication service is currently unavailable.' };
       }
 
       const trimmedEmail = email.trim();
       const trimmedName = fullName.trim();
 
-      // Basic client-side validation
       if (!trimmedEmail || !trimmedEmail.includes('@') || !trimmedEmail.includes('.')) {
+        setAuthStatus('unauthenticated');
         return { success: false, error: 'Please enter a valid official email address.' };
       }
-      if (!password || password.length < 6) {
-        return { success: false, error: 'Password must be at least 6 characters in length.' };
+      if (!password || password.length < 8) {
+        setAuthStatus('unauthenticated');
+        return { success: false, error: 'Password must be at least 8 characters in length.' };
       }
       if (!trimmedName || trimmedName.length < 2) {
-        return { success: false, error: 'Please enter your full name.' };
+        setAuthStatus('unauthenticated');
+        return { success: false, error: 'Please enter your complete full name.' };
       }
 
       const { data, error } = await client.auth.signUp({
@@ -364,16 +297,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       if (error) {
+        setAuthStatus('unauthenticated');
         return { success: false, error: error.message };
       }
 
       if (!data.user) {
+        setAuthStatus('unauthenticated');
         return { success: false, error: 'User registration could not be completed.' };
       }
 
-      // CRITICAL SECURITY CONSTRAINT:
-      // New self-service signups ALWAYS default to the 'USER' role, never 'ADMIN'.
-      // Administrative accounts can only be promoted directly in database/dashboard.
+      // Security Constraint: New self-service signups ALWAYS receive the 'USER' role
       try {
         await client.from('profiles').upsert(
           {
@@ -382,7 +315,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             full_name: trimmedName,
             role: 'USER', // STRICT: ALWAYS USER
             basin: 'Assam Operational Basin',
-            designation: 'HSSE Field Observer',
+            designation: 'Safety Officer',
             updated_at: new Date().toISOString(),
           },
           { onConflict: 'id' }
@@ -391,40 +324,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.warn('[AuthContext] Failed to upsert user profile:', upsertErr);
       }
 
-      // If Supabase immediately returns a session (e.g., auto-confirm enabled)
+      // If auto-confirm is enabled and a session is immediately issued
       if (data.session) {
-        const newSession: UserProfile = {
-          id: data.user.id,
-          name: trimmedName,
-          email: data.user.email || trimmedEmail,
-          role: 'USER', // STRICT: ALWAYS USER
-          basin: 'Assam Operational Basin',
-          designation: 'HSSE Field Observer',
-        };
-        setSession(newSession);
-        setIsRealAuthUser(true);
-        try {
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(newSession));
-        } catch {}
-
-        return {
-          success: true,
-          message: 'Account created successfully! Assigned USER role (Assam Operational Basin).',
-        };
+        const profile = await fetchProfile(data.user.id, data.user.email || trimmedEmail);
+        if (profile) {
+          setSession(profile);
+          setAuthStatus('authenticated');
+          purgeLegacyStorage();
+          return {
+            success: true,
+            message: 'Account created successfully! Assigned User access.',
+          };
+        }
       }
 
+      setAuthStatus('unauthenticated');
       return {
         success: true,
         message: 'Account registered successfully! You may now sign in with your credentials.',
       };
     } catch (err: any) {
+      setAuthStatus('unauthenticated');
       return { success: false, error: err.message || 'An unexpected error occurred during signup.' };
-    } finally {
-      setIsAuthLoading(false);
     }
   };
 
   const logout = useCallback(async () => {
+    setAuthStatus('loading');
     const client = getSupabaseClient();
     if (client) {
       try {
@@ -433,29 +359,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.warn('[AuthContext] Supabase sign out error:', e);
       }
     }
-    setSession(DEMO_PROFILES.USER); // Fallback to user role on logout for safety
-    setIsRealAuthUser(false);
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      // Ignore storage errors
-    }
+    setSession(null);
+    setAuthStatus('unauthenticated');
+    purgeLegacyStorage();
   }, []);
 
-  const switchRole = useCallback((newRole: UserRole) => {
-    // Only allow demo role switching if not a real user (or for preview)
-    const newProfile = DEMO_PROFILES[newRole] || DEMO_PROFILES.USER;
-    setSession(newProfile);
-    setIsRealAuthUser(false);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newProfile));
-    } catch {
-      // Ignore storage errors
-    }
-  }, []);
+  const role: UserRole | null = session ? session.role : null;
+  const isAuthenticated = authStatus === 'authenticated' && session !== null;
+  const isAuthLoading = authStatus === 'loading';
 
-  const role: UserRole = session?.role === 'ADMIN' ? 'ADMIN' : 'USER';
-  const isAuthenticated = Boolean(session);
   // Strictly enforce: ONLY ADMIN can escalate, override, or manage datasets. USER has zero action capability.
   const canEscalate = role === 'ADMIN';
   const canOverride = role === 'ADMIN';
@@ -466,19 +378,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         session,
         role,
+        authStatus,
         isAuthenticated,
         isAuthLoading,
-        isRealAuthUser,
         loginWithEmail,
         signUpWithEmail,
-        loginWithServerDemo,
-        loginWithDemo,
-        login,
         logout,
-        switchRole,
         canEscalate,
         canOverride,
         canManageDatasets,
+        setupIncomplete,
       }}
     >
       {children}

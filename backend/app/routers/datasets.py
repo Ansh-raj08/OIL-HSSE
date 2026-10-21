@@ -34,6 +34,7 @@ async def upload_csv(
     current_user: AuthenticatedUser = Depends(require_admin),
 ):
     content = ""
+    file_bytes = b""
     target_filename = filename or "uploaded_dataset.csv"
 
     if file:
@@ -45,6 +46,7 @@ async def upload_csv(
         target_filename = file.filename or target_filename
     elif raw_csv:
         content = raw_csv
+        file_bytes = content.encode("utf-8")
     else:
         raise HTTPException(status_code=400, detail="No file or CSV text content provided.")
 
@@ -55,12 +57,16 @@ async def upload_csv(
             filename=target_filename,
             uploaded_by=uploader_name,
         )
-        await supabase_service.save_pipeline_result(result)
+        await supabase_service.save_pipeline_result(
+            result=result,
+            file_bytes=file_bytes,
+            uploader_user=current_user,
+        )
         return result
     except ValueError as ve:
         raise HTTPException(status_code=422, detail=str(ve))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Pipeline processing failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Pipeline processing or persistence failed: {str(e)}")
 
 
 @router.delete("/{dataset_id}")

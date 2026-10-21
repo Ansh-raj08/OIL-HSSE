@@ -30,6 +30,15 @@ FORGED_HEADERS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def enable_in_memory_mode():
+    from app.config import settings
+    prev = settings.USE_IN_MEMORY_DB
+    settings.USE_IN_MEMORY_DB = True
+    yield
+    settings.USE_IN_MEMORY_DB = prev
+
+
 def test_health_check():
     """Health check must be open and return healthy system status."""
     response = client.get("/api/health")

@@ -23,19 +23,30 @@ import { getSupabaseClient } from '@/lib/supabase/client';
  * 4. Local dev fallback: 'http://localhost:8000/api'.
  */
 export function getApiBase(): string {
+  const isProd = process.env.NODE_ENV === 'production';
+
   if (typeof window === 'undefined') {
     if (process.env.BACKEND_URL) {
       const base = process.env.BACKEND_URL.replace(/\/+$/, '');
       return `${base}/api`;
     }
     if (process.env.NEXT_PUBLIC_API_URL) {
-      return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
+      const val = process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
+      if (isProd && val.includes('localhost')) {
+        return '/api';
+      }
+      return val;
     }
-    return 'http://localhost:8000/api';
+    return isProd ? '/api' : 'http://localhost:8000/api';
   }
 
   if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
+    const val = process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
+    // In production, ignore any erroneous localhost setting to prevent calling visitor's machine
+    if (isProd && val.includes('localhost')) {
+      return '/api';
+    }
+    return val;
   }
 
   return '/api';
@@ -242,9 +253,15 @@ class ApiClient {
     input: File | string,
     filename: string = 'uploaded_dataset.csv',
     uploadedBy: string = 'T. Baruah (Chief HSSE Supt.)'
-  ): Promise<CsvPipelineResult | null> {
+  ): Promise<CsvPipelineResult> {
+    const inputName = typeof input === 'string' ? filename : (input.name || filename);
+
     const isUp = await this.checkBackend();
-    if (!isUp) return null;
+    if (!isUp) {
+      const errMsg = `Could not reach the server at ${this.apiBase}. The backend is offline or unreachable. Nothing was saved.`;
+      console.error(`[ApiClient] Upload aborted: ${errMsg}`);
+      throw new Error(errMsg);
+    }
 
     try {
       const formData = new FormData();
@@ -266,11 +283,17 @@ class ApiClient {
       });
 
       if (!res.ok) {
-        const errorJson = await res.json().catch(() => ({ detail: 'Upload failed' }));
-        throw new Error(errorJson.detail || 'Backend CSV processing error');
+        let detail = `Server responded with HTTP ${res.status}: ${res.statusText}`;
+        try {
+          const errorJson = await res.json();
+          detail = errorJson.detail || errorJson.error || detail;
+        } catch {}
+        console.error(`[ApiClient] Backend CSV upload rejected: ${detail}`);
+        throw new Error(detail);
       }
 
-      return await res.json();
+      const data: CsvPipelineResult = await res.json();
+      return data;
     } catch (err: any) {
       console.warn('[ApiClient] Backend CSV upload failed:', err.message);
       throw err;

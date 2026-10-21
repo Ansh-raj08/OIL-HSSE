@@ -9,7 +9,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import Sidebar from '@/components/Sidebar';
 import IngestionModal from '@/components/IngestionModal';
 import ThemeToggleSwitch from '@/components/ui/ThemeToggleSwitch';
@@ -53,9 +53,10 @@ export default function AppShell({
   actions,
 }: AppShellProps) {
   const pathname = usePathname();
+  const router = useRouter();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const { role, session, switchRole, logout } = useAuth();
+  const { role, session, logout, isAuthLoading, isAuthenticated } = useAuth();
   const { openIngestionModal } = useSafety();
   const { timeFormat, setTimeFormat } = useTimeFormat();
   const { theme, toggleTheme } = useTheme();
@@ -63,6 +64,24 @@ export default function AppShell({
   const [timeString, setTimeString] = useState('');
   const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Route Guard: If not loading and not authenticated, immediately redirect to /login
+  useEffect(() => {
+    if (!isAuthLoading && !isAuthenticated) {
+      router.replace('/login');
+    }
+  }, [isAuthLoading, isAuthenticated, router]);
+
+  // Back-button BFCache protection: handle pageshow with persisted event
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted && !isAuthenticated) {
+        router.replace('/login');
+      }
+    };
+    window.addEventListener('pageshow', handlePageShow);
+    return () => window.removeEventListener('pageshow', handlePageShow);
+  }, [isAuthenticated, router]);
 
   // Reset scroll to top on route change
   useEffect(() => {
@@ -136,16 +155,22 @@ export default function AppShell({
     };
   }, [handleKeyDown]);
 
-  const handleRoleChange = (newRole: UserRole) => {
-    switchRole(newRole);
-    setIsRoleDropdownOpen(false);
-    toast.info(
-      `Role Switched to ${newRole === 'ADMIN' ? 'Safety Lead (ADMIN)' : 'Field Observer (USER)'}`,
-      newRole === 'ADMIN'
-        ? 'Full administrative triage, override, and deletion rights granted.'
-        : 'Read-only surveillance mode active.'
+  // While checking session or re-authenticating, do not render protected content
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-[#0E1424] flex flex-col items-center justify-center p-4">
+        <div className="w-10 h-10 rounded-full border-2 border-amber-500 border-t-transparent animate-spin mb-4" />
+        <p className="font-mono text-xs text-neutral-400 tracking-wider uppercase">
+          Verifying HSSE Surveillance Session...
+        </p>
+      </div>
     );
-  };
+  }
+
+  // Refuse to render protected content if unauthenticated
+  if (!isAuthenticated || !session) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen bg-app-page text-app-primary flex selection:bg-amber-500/20 selection:text-amber-800 dark:selection:text-amber-300 overflow-x-clip">
@@ -278,7 +303,7 @@ export default function AppShell({
                     ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/40 hover:bg-amber-500/20'
                     : 'bg-blue-500/10 text-blue-700 dark:text-blue-400 border-blue-500/40 hover:bg-blue-500/20'
                 }`}
-                title={`Active session: ${role}. Click to switch role.`}
+                title={`Authenticated session: ${role === 'ADMIN' ? 'Admin' : 'User'}`}
               >
                 {role === 'ADMIN' ? (
                   <ShieldCheck className="w-3.5 h-3.5" />
@@ -323,7 +348,7 @@ export default function AppShell({
                       </span>
                     </div>
                     <div className="text-[10px] text-app-muted mt-1">
-                      {role === 'ADMIN' ? 'Chief HSSE Superintendent (Full Authority)' : 'Field Observer (Read-Only Surveillance)'}
+                      {role === 'ADMIN' ? 'Admin' : 'User'}
                     </div>
                   </div>
 

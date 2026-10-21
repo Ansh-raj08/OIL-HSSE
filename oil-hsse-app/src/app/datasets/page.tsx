@@ -13,7 +13,6 @@ import { useSafety } from '@/context/SafetyContext';
 import { useTimeFormat } from '@/context/TimeFormatContext';
 import { Dataset } from '@/types/safety';
 import { apiClient } from '@/lib/api/client';
-import { supabaseDeleteDataset } from '@/lib/supabase/db';
 import { DatasetsSkeleton, ButtonSpinner } from '@/components/ui/Skeleton';
 import { useToast } from '@/context/ToastContext';
 import {
@@ -40,6 +39,7 @@ export default function DatasetsPage() {
     removeDataset,
     removeDatasetIncidents,
     refreshDatasets,
+    refreshIncidents,
     isLoading,
   } = useSafety();
   const { formatTimestamp } = useTimeFormat();
@@ -52,6 +52,7 @@ export default function DatasetsPage() {
 
   useEffect(() => {
     refreshDatasets();
+    refreshIncidents();
   }, []);
 
   useEffect(() => {
@@ -70,10 +71,14 @@ export default function DatasetsPage() {
     setIsDeleting(true);
     setDeleteError(null);
     try {
-      await apiClient.deleteDataset(datasetToDelete.id);
-      supabaseDeleteDataset(datasetToDelete.id, 'Administrator (Chief HSSE Supt.)');
+      const ok = await apiClient.deleteDataset(datasetToDelete.id);
+      if (!ok) {
+        throw new Error('Server could not delete dataset. Please verify backend connection and administrative privileges.');
+      }
       removeDataset(datasetToDelete.id);
       removeDatasetIncidents(datasetToDelete.id);
+      await refreshDatasets();
+      await refreshIncidents();
       if (selectedDataset?.id === datasetToDelete.id) {
         const remaining = datasets.filter((d) => d.id !== datasetToDelete.id);
         setSelectedDataset(remaining[0] || null);

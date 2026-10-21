@@ -76,8 +76,8 @@ async def get_current_user(
                 id="6bf50f45-9749-49c5-81de-b74550e2d743",
                 email="user@oilindia.in",
                 role="USER",
-                full_name="HSSE Field Observer",
-                designation="HSSE Observer",
+                full_name="Standard User",
+                designation="Safety Officer",
                 basin="Assam Operational Basin",
             )
         else:

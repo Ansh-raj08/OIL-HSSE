@@ -16,9 +16,6 @@ import {
 import { apiClient } from '@/lib/api/client';
 import {
   supabaseListIncidents,
-  supabaseConfirmIncident,
-  supabaseOverrideIncident,
-  supabaseInsertIncident,
   supabaseListDatasets,
 } from '@/lib/supabase/db';
 
@@ -269,7 +266,7 @@ const SafetyContext = createContext<SafetyContextType | undefined>(undefined);
 export function SafetyProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(safetyReducer, initialState);
 
-  const refreshDatasets = async () => {
+  const refreshDatasets = useCallback(async () => {
     try {
       const apiRes = await apiClient.getDatasets();
       if (apiRes) {
@@ -287,51 +284,35 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       console.warn('[SafetyContext] Supabase list datasets failed:', err);
     }
-  };
+  }, []);
+
+  const refreshIncidents = useCallback(async () => {
+    try {
+      const backendRes = await apiClient.getIncidents({ pageSize: 100 });
+      if (backendRes) {
+        dispatch({ type: 'SET_INCIDENTS', payload: backendRes.incidents });
+        return;
+      }
+    } catch (err) {
+      console.warn('[SafetyContext] Backend getIncidents failed:', err);
+    }
+    try {
+      const supabaseRes = await supabaseListIncidents({ limit: 100 });
+      if (supabaseRes) {
+        dispatch({ type: 'SET_INCIDENTS', payload: supabaseRes });
+      }
+    } catch (err) {
+      console.warn('[SafetyContext] Supabase list incidents fallback failed:', err);
+    }
+  }, []);
 
   // Load live incidents and datasets from FastAPI backend or Supabase if available
   useEffect(() => {
     let isMounted = true;
     async function loadData() {
       try {
-        // 1. Try FastAPI backend (primary source of truth)
-        try {
-          const backendRes = await apiClient.getIncidents({ pageSize: 100 });
-          if (backendRes && isMounted) {
-            dispatch({ type: 'SET_INCIDENTS', payload: backendRes.incidents });
-          }
-        } catch (err) {
-          console.warn('[SafetyContext] FastAPI backend unavailable, checking direct persistence:', err);
-        }
-
-        // Load datasets
-        try {
-          const backendDatasets = await apiClient.getDatasets();
-          if (backendDatasets && isMounted) {
-            dispatch({ type: 'SET_DATASETS', payload: backendDatasets });
-          }
-        } catch (err) {
-          console.warn('[SafetyContext] FastAPI getDatasets unavailable:', err);
-        }
-
-        // 2. Try Supabase direct persistence if not loaded
-        try {
-          const supabaseRes = await supabaseListIncidents({ limit: 100 });
-          if (supabaseRes && isMounted) {
-            dispatch({ type: 'SET_INCIDENTS', payload: supabaseRes });
-          }
-        } catch (err) {
-          console.warn('[SafetyContext] Supabase direct fallback unavailable:', err);
-        }
-
-        try {
-          const supaDatasets = await supabaseListDatasets();
-          if (supaDatasets && isMounted) {
-            dispatch({ type: 'SET_DATASETS', payload: supaDatasets });
-          }
-        } catch (err) {
-          console.warn('[SafetyContext] Supabase list datasets unavailable:', err);
-        }
+        await refreshIncidents();
+        await refreshDatasets();
       } finally {
         if (isMounted) {
           dispatch({ type: 'SET_LOADING', payload: false });
@@ -342,7 +323,7 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [refreshIncidents, refreshDatasets]);
 
 
   // Real-time KPI calculations
@@ -373,25 +354,33 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
   const openOverrideModal = useCallback(() => dispatch({ type: 'OPEN_OVERRIDE_MODAL' }), []);
   const closeOverrideModal = useCallback(() => dispatch({ type: 'CLOSE_OVERRIDE_MODAL' }), []);
 
-  const confirmAndEscalate = useCallback((incidentId: string, officerName?: string, notes?: string) => {
+  const confirmAndEscalate = useCallback(async (incidentId: string, officerName?: string, notes?: string) => {
+    const name = officerName || 'T. Baruah (Chief HSSE Supt.)';
     dispatch({
       type: 'CONFIRM_AND_ESCALATE',
       payload: { incidentId, officerName, notes },
     });
-    const name = officerName || 'T. Baruah (Chief HSSE Supt.)';
-    apiClient.confirmIncident(incidentId, name, notes);
-    supabaseConfirmIncident(incidentId, name, notes);
-  }, []);
+    try {
+      await apiClient.confirmIncident(incidentId, name, notes);
+      await refreshIncidents();
+    } catch (err) {
+      console.error('[SafetyContext] Confirm & Escalate backend call failed:', err);
+    }
+  }, [refreshIncidents]);
 
-  const overrideIncident = useCallback((incidentId: string, justification: string, officerName?: string) => {
+  const overrideIncident = useCallback(async (incidentId: string, justification: string, officerName?: string) => {
+    const name = officerName || 'T. Baruah (Chief HSSE Supt.)';
     dispatch({
       type: 'OVERRIDE_INCIDENT',
       payload: { incidentId, justification, officerName },
     });
-    const name = officerName || 'T. Baruah (Chief HSSE Supt.)';
-    apiClient.overrideIncident(incidentId, name, justification);
-    supabaseOverrideIncident(incidentId, name, justification);
-  }, []);
+    try {
+      await apiClient.overrideIncident(incidentId, name, justification);
+      await refreshIncidents();
+    } catch (err) {
+      console.error('[SafetyContext] Technical Override backend call failed:', err);
+    }
+  }, [refreshIncidents]);
 
   const addIncident = useCallback((incident: Omit<SafetyIncident, 'id' | 'timestamp' | 'validationStatus'>) => {
     dispatch({ type: 'ADD_INCIDENT', payload: incident });
@@ -445,6 +434,7 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
       addDataset,
       removeDataset,
       refreshDatasets,
+      refreshIncidents,
       removeDatasetIncidents,
       openIngestionModal,
       closeIngestionModal,
@@ -473,6 +463,8 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
       addDataset,
       removeDataset,
       removeDatasetIncidents,
+      refreshDatasets,
+      refreshIncidents,
       openIngestionModal,
       closeIngestionModal,
       openOverrideModal,

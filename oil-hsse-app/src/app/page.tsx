@@ -16,14 +16,14 @@ import HoverBorderGradientDemo from '@/components/ui/hover-border-gradient-demo'
 
 export default function RootLandingPage() {
   const router = useRouter();
-  const { isAuthenticated, isRealAuthUser } = useAuth();
+  const { isAuthenticated, session } = useAuth();
 
   // Route authenticated visitors straight to /dashboard
   useEffect(() => {
-    if (isAuthenticated && isRealAuthUser) {
+    if (isAuthenticated && session) {
       router.replace('/dashboard');
     }
-  }, [isAuthenticated, isRealAuthUser, router]);
+  }, [isAuthenticated, session, router]);
 
   return (
     <PublicShell mode="landing">

@@ -4,8 +4,8 @@
 > **Problem Statement ID:** SIH26165  
 > **Problem Statement Title:** AI/NLP Engine to Detect Serious Injury & Fatality (SIF) Precursors in OIL's Unsafe-Act / Unsafe-Condition and Near-Miss Reports  
 > **Client / Domain:** Oil India Limited (OIL) — Upstream E&P HSSE Directorate  
-> **Current Platform Version:** v2.4.0 (Display: `v2.4.0 · Rose`)  
-> **Last Updated:** 2026-10-05  
+> **Current Platform Version:** v2.6.0 (Display: `v2.6.0 · PR2`)  
+> **Last Updated:** 2026-10-21  
 
 ---
 
@@ -54,7 +54,7 @@ An enterprise-grade, high-density supervisory control layer combining:
 | **Explainability Decision Modal** | `oil-hsse-app/src/components/ExplainabilityConsole.tsx` | ✅ Production Ready | High-density dialog with XAI weights, LSR rationale, controls, collapsed narrative, and role gating. |
 | **Centralized SVG Icon System** | `oil-hsse-app/src/components/ui/iconMap.tsx` | ✅ Production Ready | Single source of truth for severities, statuses, categories, and roles using `lucide-react`. Zero emojis. |
 | **Universal EmptyState Component** | `oil-hsse-app/src/components/ui/EmptyState.tsx` | ✅ Production Ready | Shared zero-emoji SVG component with standard & compact modes for Dashboard, Datasets, and Analytics. |
-| **Offline India Incident Heatmap** | `oil-hsse-app/src/components/IndiaIncidentMap.tsx` | ✅ Production Ready | 100% offline SVG map bundled with local TopoJSON/GeoJSON, Upper Assam coordinate lookup, pulse markers. |
+| **Offline India Incident Heatmap** | `oil-hsse-app/src/components/IndiaIncidentMap.tsx` | ✅ Production Ready | 100% offline SVG map with bounding box auto-fit, regional span floor & cap, static proportional bubbles ($r \propto \sqrt{N}$), worst-severity fill tokens, 1.5px contrasting stroke, static critical outer ring, linked risk-ranked site list, unmapped sites notice, and "Fit to data" control. |
 | **3-Stage Batch CSV Ingestion Flow** | `oil-hsse-app/src/components/IngestionModal.tsx` | ✅ Production Ready | Staged workflow: (1) Upload dropzone, (2) Clean Quality Report + Expandable Data Review, (3) Sequential processing. |
 | **Datasets & Batch Governance** | `oil-hsse-app/src/app/datasets/page.tsx` | ✅ Production Ready | Dataset inspection, OISD/DGMS audit notice, ADMIN-only cascade deletion with confirmation modal. |
 | **REST API Contract Specification** | `rest/API_CONTRACT.md` | ✅ Production Ready | Comprehensive API contract documenting all endpoints, parameters, schemas, RBAC, and audit guarantees. |
@@ -62,7 +62,7 @@ An enterprise-grade, high-density supervisory control layer combining:
 | **Fixed & Resizable Sidebar Shell** | `oil-hsse-app/src/components/Sidebar.tsx` | ✅ Production Ready | Sticky `100dvh` viewport shell with native window scroll, zero-jank pointer capture drag handle updating `--sidebar-w` via RAF, keyboard operable. |
 | **Portal-Anchored Incident Modal** | `oil-hsse-app/src/components/ExplainabilityConsole.tsx` | ✅ Production Ready | Viewport portal to `document.body`, pinned header, pinned admin action footer, internal scroll body with scroll lock and focus return. |
 | **Refined Editorial Login Page** | `oil-hsse-app/src/app/login/page.tsx` | ✅ Production Ready | Left-aligned display typography, constrained line lengths (12–18 chars/line headline, 60–70 chars/line body), purged legacy badges, mounted theme switch. |
-| **Centralized Version Registry** | `oil-hsse-app/src/config/version.ts` | ✅ Production Ready | Single source of truth defining `v2.5.2 · P(1x)` (`APP_VERSION = '2.5.2'`, `RELEASE_CODENAME = 'P(1x)'`), synchronizing all UI surfaces and package.json. |
+| **Centralized Version Registry** | `oil-hsse-app/src/config/version.ts` | ✅ Production Ready | Single source of truth defining `v2.6.0 · PR2` (`APP_VERSION = '2.6.0'`, `RELEASE_CODENAME = 'PR2'`), synchronizing all UI surfaces, package.json, and backend `/api/health`. |
 
 ---
 
@@ -652,6 +652,70 @@ Whenever making modifications, bug fixes, or enhancements:
   - Gated by `NEXT_PUBLIC_ENABLE_DEMO_MODE=true`.
   - Credentials held in server environment variables via `POST /api/auth/demo`.
   - Real sessions created with roles read directly from database `profiles`. Zero client-side role assignment.
+
+---
+
+### [v2.6.0 · PR2] — 2026-10-21: Auth Fail-Open Resolution, Demo Role Removal, Sign-In Polish, Geospatial Heatmap Redesign
+
+**Theme:** Industrial Zero-Trust Authentication, Complete Demo Role Purge, Mathematical Segmented Switch Alignment, Client-Side Confirm Password, and Context-Aware Regional Heatmap with Proportional Bubbles.
+
+#### 1. Section 0 — Critical Auth Fail-Open Remediation
+- **Root Cause Elimination**:
+  - Identified and removed `DEMO_PROFILES.ADMIN` default initial session state in `oil-hsse-app/src/context/AuthContext.tsx`.
+  - Removed `DEMO_PROFILES.USER` fallback on `logout()`.
+  - Purged legacy `localStorage` session rehydration (`oil_hsse_auth_session`, `oil_hsse_demo_role`, `demo_session`).
+  - Added strict route guard in `AppShell.tsx` ensuring zero protected content renders when unauthenticated or during `isAuthLoading`.
+  - Added `pageshow` with `event.persisted` BFCache guard to prevent back-button caching of protected views after session termination.
+- **Strict State Machine**:
+  - Context transitions strictly: `loading` ➔ `unauthenticated` | `authenticated(profile)`.
+  - Every authenticated session requires both a valid Supabase token and a corresponding row in `public.profiles`. If the profile row is missing, the session is invalidated with `"Your account setup is incomplete. Please contact an administrator."`
+  - Roles are strictly restricted to `ADMIN` and `USER`. Deleted all role-switchers (`switchRole`, `handleRoleChange`) and hardcoded demo labels.
+
+#### 2. Section 1 — Complete Demo Role & Route Purge
+- Deleted `/api/auth/demo` route (`oil-hsse-app/src/app/api/auth/demo/route.ts`).
+- Removed `/api/auth/demo` rewrite from `vercel.json`.
+- Removed demo evaluation buttons from `/login` and landing page.
+- Stripped all demo environment variables (`NEXT_PUBLIC_ENABLE_DEMO_MODE`, `DEMO_ADMIN_*`, etc.) from `.env.local` and `.env.example`.
+- Purged legacy mock labels from backend `auth_service.py` and `auth.py`.
+
+#### 3. Section 2 — Segmented Control Switch Spacing & Math
+- Container: `grid grid-cols-2`, uniform 4px inset on all four edges, 1px hairline border (`border-white/10`), 12px border radius, 48px height.
+- Single indicator: `left: 4px; top: 4px; bottom: 4px; width: calc((100% - 8px) / 2)` with 8px radius, driven purely by `transform: translateX(0)` or `translateX(100%)` (200ms ease-out). Zero asymmetric margins.
+- Typography & Accessibility: 14–15px weight 600 labels, centered both ways, meeting WCAG 4.5:1 contrast on dark surface (`text-neutral-300 hover:text-white`), ARIA `role="tablist"` / `role="tab"`, keyboard arrow navigation, and visible focus rings.
+
+#### 4. Section 3 — Confirm Password Validation
+- Field sequence: Full name (personnel record) ➔ Official email ➔ Password ➔ Confirm password.
+- Both password inputs utilize `autoComplete="new-password"`, 8-character minimum enforcement, and independent show/hide toggles with descriptive `aria-label` attributes.
+- Non-blocking client validation: validates on blur and submit; re-validates in real time on password changes when touched; displays `"Passwords don't match"` below confirm field when differing. Native paste fully permitted.
+- Zero network exposure: `confirmPassword` is client-side only and never transmitted in auth requests.
+
+#### 5. Section 4 — Single-Source Version Bump
+- Unified platform version: `v2.6.0 · PR2` synchronized across:
+  - Frontend: `oil-hsse-app/src/config/version.ts` (`APP_VERSION = '2.6.0'`, `RELEASE_CODENAME = 'PR2'`, `FULL_VERSION_STRING = 'v2.6.0 · PR2'`).
+  - Frontend `package.json`: `"version": "2.6.0"`.
+  - Backend: `backend/app/config.py` (`APP_VERSION = "v2.6.0 · PR2"`) exposed via `/api/health`.
+  - Displayed in login footer, navigation header, and sidebar.
+
+#### 6. Section 5 — India Geospatial Heatmap Redesign
+- **Bounding Box Auto-Fit**:
+  - Dynamically calculates coordinates bounding box across all active incident clusters with 15% padding.
+  - Implements a regional span floor (8.0° lon × 6.5° lat) and zoom cap (3.6x) to preserve regional context (Assam Basin & Northeast neighboring states) without over-zooming on single-site data.
+  - Camera automatically fits on first render and data filter changes; user pan/zoom freezes auto-fit until restored via dedicated **Fit to data** button.
+  - Panning constrained to India extent via `translateExtent`.
+- **Static Proportional Bubbles**:
+  - Area proportional to incident count ($r \propto \sqrt{N}$), completely eliminating legacy pulsing and ping animations.
+  - Surface-contrasting 1.5px stroke distinguishes overlapping field sites in Upper Assam basin.
+  - Worst-severity fill derived directly from theme tokens (Critical, High, Medium, Low).
+  - Count label rendered inside larger bubbles ($r \ge 13$px); static outer ring rendered for sites with critical SIF precursors.
+  - Larger bubbles rendered first in DOM order so smaller ones remain fully visible.
+- **Ranked Site List**:
+  - Adjacent desktop pane (stacked on mobile) with risk-ranked field asset breakdown.
+  - Bidirectional hover and focus linking: hovering a site highlights its map bubble; hovering a map marker highlights the site in the list.
+  - Clicking any bubble or site item filters the triage stream to that site and routes to the dashboard triage feed.
+- **Unmapped Sites Transparency**:
+  - Sites falling outside known coordinates fall back to Duliajan HQ and trigger a prominent warning notice in the UI: *"N incidents are at sites not on the map and are shown at Duliajan HQ: [Sites]"*.
+  - Full details logged via `console.warn` for audit traceability.
+
 
 
 

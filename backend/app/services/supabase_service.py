@@ -52,7 +52,7 @@ class SupabaseService:
 
     def __init__(self):
         self.client: Optional[Any] = None
-        self.is_configured = False
+        self._is_configured = False
 
         # Local file-backed storage configuration (ONLY used if USE_IN_MEMORY_DB=true is explicitly set)
         self._storage_file = os.path.abspath(
@@ -99,7 +99,7 @@ class SupabaseService:
 
         try:
             self.client = create_client(settings.SUPABASE_URL, active_key)
-            self.is_configured = True
+            self._is_configured = True
         except Exception as e:
             err_msg = f"[CRITICAL FATAL ERROR] Failed to initialize Supabase client for {settings.SUPABASE_URL}: {e}"
             print(err_msg)
@@ -113,6 +113,16 @@ class SupabaseService:
         print(f"  Target:  {settings.SUPABASE_URL}")
         print(f"  Auth:    {key_label} ACTIVE")
         print("=" * 80)
+
+    @property
+    def is_configured(self) -> bool:
+        if settings.USE_IN_MEMORY_DB:
+            return False
+        return getattr(self, "_is_configured", False) and bool(self.client)
+
+    @is_configured.setter
+    def is_configured(self, val: bool):
+        self._is_configured = val
 
     def _persist_to_disk(self) -> None:
         """Persists in-memory datasets, incidents, and audit logs to disk."""
@@ -457,7 +467,7 @@ class SupabaseService:
         
         # Persist to Supabase if live
         if self.is_configured and self.client:
-            self.client.table("incidents").insert({
+            self.client.table("incidents").upsert({
                 "id": incident.id,
                 "site": incident.site,
                 "basin": incident.basin,
@@ -469,7 +479,7 @@ class SupabaseService:
                 "validation_status": incident.validationStatus,
             }).execute()
             
-            self.client.table("incident_analysis").insert({
+            self.client.table("incident_analysis").upsert({
                 "incident_id": incident.id,
                 "risk_score": incident.riskScore,
                 "risk_level": incident.riskLevel,
@@ -569,27 +579,96 @@ class SupabaseService:
         self._persist_to_disk()
         return incident
 
-    async def save_pipeline_result(self, result: CsvPipelineResult) -> None:
+    async def check_live_query(self) -> Dict[str, Any]:
+        """Performs a lightweight query to verify active database health."""
+        if not self.is_configured or not self.client:
+            return {"status": "in-memory", "liveQuery": "skipped"}
+        import time
+        start = time.time()
+        try:
+            res_ds = self.client.table("datasets").select("count", count="exact").limit(1).execute()
+            res_inc = self.client.table("incidents").select("count", count="exact").limit(1).execute()
+            latency = round((time.time() - start) * 1000, 2)
+            return {
+                "status": "ok",
+                "latencyMs": latency,
+                "datasetCount": res_ds.count if res_ds.count is not None else 0,
+                "incidentCount": res_inc.count if res_inc.count is not None else 0,
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": str(e),
+            }
+
+    async def save_pipeline_result(
+        self,
+        result: CsvPipelineResult,
+        file_bytes: Optional[bytes] = None,
+        uploader_user: Optional[Any] = None,
+    ) -> None:
+        """
+        Persists full CSV pipeline output:
+        1. Stores original raw CSV in Supabase Storage 'raw-datasets' bucket.
+        2. Inserts dataset record with row counts and validates response.
+        3. Inserts batch incidents and analyses, strictly asserting inserted rows match.
+        4. Writes an immutable audit log entry.
+        """
+        import uuid as uuid_lib
+
         ds_uuid = self._ensure_uuid(result.dataset.id)
         result.dataset.id = ds_uuid
 
         if self.is_configured and self.client:
-            # 1. Dataset - insert with verified UUID
-            self.client.table("datasets").insert({
+            storage_path = f"{ds_uuid}/{result.dataset.filename}"
+            
+            # 1. Store original file in Supabase Storage 'raw-datasets' bucket
+            if file_bytes:
+                try:
+                    self.client.storage.from_("raw-datasets").upload(
+                        path=storage_path,
+                        file=file_bytes,
+                        file_options={"content-type": "text/csv", "upsert": "true"},
+                    )
+                    print(f"[SupabaseService] Uploaded original file to raw-datasets bucket: {storage_path}")
+                except Exception as storage_err:
+                    print(f"[SupabaseService] Warning: bucket upload failed: {storage_err}")
+
+            # Resolve valid uploader profile UUID
+            valid_uploader_uuid = None
+            if uploader_user and getattr(uploader_user, "id", None):
+                try:
+                    cand_uuid = str(uuid_lib.UUID(str(uploader_user.id)))
+                    prof_chk = self.client.table("profiles").select("id").eq("id", cand_uuid).maybe_single().execute()
+                    if prof_chk and prof_chk.data:
+                        valid_uploader_uuid = cand_uuid
+                except Exception:
+                    valid_uploader_uuid = None
+
+            # 2. Insert Dataset record and verify result
+            ds_insert_payload = {
                 "id": ds_uuid,
                 "filename": result.dataset.filename,
                 "original_filename": result.dataset.filename,
+                "storage_path": storage_path if file_bytes else None,
+                "file_size_bytes": len(file_bytes) if file_bytes else 0,
                 "row_count": result.dataset.totalRows,
                 "valid_row_count": result.dataset.validRows,
                 "invalid_row_count": result.dataset.invalidRows,
                 "warning_row_count": result.dataset.warningRows,
                 "status": "READY",
-            }).execute()
-            
-            # 2. Incidents & Analysis
+                "uploaded_by": valid_uploader_uuid,
+            }
+            ds_res = self.client.table("datasets").insert(ds_insert_payload).execute()
+            if not ds_res.data or len(ds_res.data) == 0:
+                raise RuntimeError("Database insert into 'datasets' failed: zero rows returned by Supabase.")
+
+            # 3. Batch Insert Incidents and verify result
+            incidents_payload = []
+            analysis_payload = []
             for inc in result.incidents:
                 inc.datasetId = ds_uuid
-                self.client.table("incidents").insert({
+                incidents_payload.append({
                     "id": inc.id,
                     "dataset_id": ds_uuid,
                     "site": inc.site,
@@ -600,9 +679,8 @@ class SupabaseService:
                     "raw_narrative": inc.rawNarrative,
                     "truncated_narrative": inc.truncatedNarrative,
                     "validation_status": inc.validationStatus,
-                }).execute()
-                
-                self.client.table("incident_analysis").insert({
+                })
+                analysis_payload.append({
                     "incident_id": inc.id,
                     "risk_score": inc.riskScore,
                     "risk_level": inc.riskLevel,
@@ -612,7 +690,45 @@ class SupabaseService:
                     "lsr_violations": [v.model_dump() for v in inc.lsrViolations],
                     "xai_triggers": [x.model_dump() for x in inc.xaiTriggers],
                     "hierarchy_actions": [h.model_dump() for h in inc.hierarchyActions],
-                }).execute()
+                })
+
+            if incidents_payload:
+                inc_res = self.client.table("incidents").upsert(incidents_payload).execute()
+                if not inc_res.data or len(inc_res.data) != len(incidents_payload):
+                    raise RuntimeError(
+                        f"Database write into 'incidents' failed: expected {len(incidents_payload)} rows, "
+                        f"got {len(inc_res.data or [])}."
+                    )
+
+            if analysis_payload:
+                an_res = self.client.table("incident_analysis").upsert(analysis_payload).execute()
+                if not an_res.data or len(an_res.data) != len(analysis_payload):
+                    raise RuntimeError(
+                        f"Database insert into 'incident_analysis' failed: expected {len(analysis_payload)} rows, "
+                        f"got {len(an_res.data or [])}."
+                    )
+
+            # 4. Write immutable regulatory audit log entry
+            uploader_name = getattr(uploader_user, "full_name", None) or getattr(uploader_user, "email", "Administrator")
+            audit_payload = {
+                "id": str(uuid_lib.uuid4()),
+                "entity_type": "dataset",
+                "entity_id": ds_uuid,
+                "action": "DATASET_UPLOAD",
+                "actor_id": valid_uploader_uuid,
+                "actor_name": uploader_name,
+                "details": {
+                    "filename": result.dataset.filename,
+                    "total_rows": result.dataset.totalRows,
+                    "valid_rows": result.dataset.validRows,
+                    "sif_count": result.summary.sifCount,
+                    "critical_count": result.summary.criticalCount,
+                    "storage_path": storage_path if file_bytes else None,
+                },
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self.client.table("audit_logs").insert(audit_payload).execute()
+            print(f"[SupabaseService] Committed dataset {ds_uuid} with {len(incidents_payload)} incidents & audit log.")
             return
 
         if not settings.USE_IN_MEMORY_DB:

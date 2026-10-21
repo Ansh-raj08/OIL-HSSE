@@ -21,12 +21,6 @@
   },
   "rewrites": [
     {
-      "source": "/api/auth/demo",
-      "destination": {
-        "service": "oil-hsse-app"
-      }
-    },
-    {
       "source": "/api/(.*)",
       "destination": {
         "service": "backend"

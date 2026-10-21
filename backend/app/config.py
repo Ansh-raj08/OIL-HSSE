@@ -17,7 +17,7 @@ load_dotenv()
 
 class Settings(BaseModel):
     APP_NAME: str = "OIL HSSE SIF-Precursor Decision-Support API"
-    APP_VERSION: str = "2.4.0"
+    APP_VERSION: str = "v2.6.0 · PR2"
     HOST: str = os.getenv("API_HOST", "0.0.0.0")
     PORT: int = int(os.getenv("API_PORT", "8000"))
     CORS_ORIGINS: list[str] = [

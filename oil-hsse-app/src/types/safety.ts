@@ -122,6 +122,7 @@ export interface SafetyContextType {
   addDataset: (dataset: Dataset) => void;
   removeDataset: (datasetId: string) => void;
   refreshDatasets: () => Promise<void>;
+  refreshIncidents: () => Promise<void>;
   removeDatasetIncidents: (datasetId: string) => void;
   openIngestionModal: () => void;
   closeIngestionModal: () => void;

@@ -59,6 +59,8 @@ export default function IngestionModal() {
     closeIngestionModal,
     addIncident,
     commitDatasetIngestion,
+    refreshDatasets,
+    refreshIncidents,
   } = useSafety();
   const toast = useToast();
 
@@ -135,87 +137,44 @@ export default function IngestionModal() {
         basin: 'Assam Operational Basin',
       });
 
-      if (backendIncident) {
-        addIncident(backendIncident);
-      } else {
-        addIncident({
-          site,
-          basin: 'Assam Operational Basin',
-          reportedBy,
-          category,
-          rawNarrative: narrative.trim(),
-          truncatedNarrative:
-            narrative.trim().length > 120
-              ? narrative.trim().substring(0, 117) + '...'
-              : narrative.trim(),
-          riskScore: analysis.risk.score,
-          riskLevel: analysis.risk.level,
-          isSifPrecursor: analysis.isSifPrecursor,
-          lsrCategory: analysis.lsr.code,
-          lsrTitle: analysis.lsr.title,
-          lsrViolations: analysis.lsrViolations,
-          xaiTriggers: analysis.xaiTriggers,
-          hierarchyActions: analysis.hierarchyActions,
-          escalationLikelihood: analysis.escalationLikelihood,
-        });
+      if (!backendIncident) {
+        throw new Error('Could not reach the server. Nothing was saved.');
       }
-    } catch {
-      addIncident({
-        site,
-        basin: 'Assam Operational Basin',
-        reportedBy,
-        category,
-        rawNarrative: narrative.trim(),
-        truncatedNarrative:
-          narrative.trim().length > 120
-            ? narrative.trim().substring(0, 117) + '...'
-            : narrative.trim(),
-        riskScore: analysis.risk.score,
-        riskLevel: analysis.risk.level,
-        isSifPrecursor: analysis.isSifPrecursor,
-        lsrCategory: analysis.lsr.code,
-        lsrTitle: analysis.lsr.title,
-        lsrViolations: analysis.lsrViolations,
-        xaiTriggers: analysis.xaiTriggers,
-        hierarchyActions: analysis.hierarchyActions,
-        escalationLikelihood: analysis.escalationLikelihood,
-      });
+
+      addIncident(backendIncident);
+      await refreshIncidents();
+      handleClose();
+      toast.success(
+        'Observation Logged Successfully',
+        `Recorded observation (ID: ${backendIncident.id}) in priority triage stream with SIF risk score of ${analysis.risk.score}/100.`
+      );
+    } catch (err: any) {
+      toast.error('Submission Failed', err.message || 'Could not reach the server. Nothing was saved.');
     }
-    handleClose();
-    toast.success(
-      'Observation Logged Successfully',
-      `Recorded in priority triage stream with SIF risk score of ${analysis.risk.score}/100.`
-    );
   };
 
   const handlePrefill = (scenarioText: string) => {
     setNarrative(scenarioText);
   };
 
-  // Step 1 -> Step 2: Handle CSV selection and parse into Quality Report
+  // Step 1 -> Step 2: Handle CSV selection and send to server pipeline
   const handleCsvFileSelect = async (file: File) => {
     setCsvFile(file);
     setCsvFileName(file.name);
     setCsvError(null);
     setCsvParsing(true);
     try {
-      let result = await apiClient.uploadCsv(file, file.name);
-      if (!result) {
-        result = await processCsvPipeline(file, file.name);
+      const result = await apiClient.uploadCsv(file, file.name);
+      if (!result || !result.dataset?.id) {
+        throw new Error('Could not reach the server. Nothing was saved.');
       }
       setCsvResult(result);
       setCsvStep('QUALITY_REPORT');
       setIsReviewExpanded(false);
     } catch (err: any) {
-      try {
-        const fallback = await processCsvPipeline(file, file.name);
-        setCsvResult(fallback);
-        setCsvStep('QUALITY_REPORT');
-        setIsReviewExpanded(false);
-      } catch (fallbackErr: any) {
-        setCsvError(err.message || fallbackErr.message || 'Failed to process CSV file');
-        setCsvResult(null);
-      }
+      console.error('[IngestionModal] Server rejected CSV upload:', err);
+      setCsvError(err.message || 'Could not reach the server. Nothing was saved.');
+      setCsvResult(null);
     } finally {
       setCsvParsing(false);
     }
@@ -227,25 +186,21 @@ export default function IngestionModal() {
     setCsvParsing(true);
     try {
       const response = await fetch('/sample-datasets/OIL_Assam_Field_Logs_Sample.csv');
+      if (!response.ok) {
+        throw new Error('Could not load sample file from assets.');
+      }
       const csvText = await response.text();
-      let result = await apiClient.uploadCsv(csvText, 'OIL_Assam_Field_Logs_Sample.csv');
-      if (!result) {
-        result = await processCsvPipeline(csvText, 'OIL_Assam_Field_Logs_Sample.csv');
+      const result = await apiClient.uploadCsv(csvText, 'OIL_Assam_Field_Logs_Sample.csv');
+      if (!result || !result.dataset?.id) {
+        throw new Error('Could not reach the server. Nothing was saved.');
       }
       setCsvResult(result);
       setCsvStep('QUALITY_REPORT');
       setIsReviewExpanded(false);
     } catch (err: any) {
-      try {
-        const response = await fetch('/sample-datasets/OIL_Assam_Field_Logs_Sample.csv');
-        const csvText = await response.text();
-        const fallback = await processCsvPipeline(csvText, 'OIL_Assam_Field_Logs_Sample.csv');
-        setCsvResult(fallback);
-        setCsvStep('QUALITY_REPORT');
-        setIsReviewExpanded(false);
-      } catch (fallbackErr: any) {
-        setCsvError(err.message || fallbackErr.message || 'Failed to load sample dataset');
-      }
+      console.error('[IngestionModal] Error during sample upload:', err);
+      setCsvError(err.message || 'Could not reach the server. Nothing was saved.');
+      setCsvResult(null);
     } finally {
       setCsvParsing(false);
     }
@@ -264,15 +219,21 @@ export default function IngestionModal() {
         setProcessingStageIndex(stage);
       } else {
         clearInterval(interval);
-        setTimeout(() => {
+        setTimeout(async () => {
           commitDatasetIngestion({
             incidents: csvResult.incidents,
             dataset: csvResult.dataset,
           });
+          try {
+            await refreshDatasets();
+            await refreshIncidents();
+          } catch (e) {
+            console.error('[IngestionModal] Refetch after commit failed:', e);
+          }
           handleClose();
           toast.success(
             'Field CSV Ingested Successfully',
-            `Validated and committed ${csvResult.incidents.length} incident records from "${csvFileName}".`
+            `Validated and committed ${csvResult.incidents.length} incident records from "${csvFileName}". Dataset ID: ${csvResult.dataset.id}`
           );
         }, 150);
       }
@@ -636,11 +597,32 @@ export default function IngestionModal() {
                   </div>
                 )}
 
-                {/* Error Banner */}
+                {/* Error Banner with Explicit Retry Action */}
                 {csvError && (
-                  <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex items-center gap-2.5">
-                    <AlertTriangle className="w-4 h-4 flex-shrink-0" />
-                    <span>{csvError}</span>
+                  <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <AlertTriangle className="w-4 h-4 flex-shrink-0 text-red-600 dark:text-red-400" />
+                      <span className="font-sans leading-relaxed">{csvError}</span>
+                    </div>
+                    {csvFile ? (
+                      <button
+                        type="button"
+                        onClick={() => handleCsvFileSelect(csvFile)}
+                        className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-mono text-[11px] font-semibold hover:bg-red-700 transition cursor-pointer flex-shrink-0 shadow-xs flex items-center gap-1.5 self-start sm:self-auto"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Retry Upload</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleLoadSampleCsv}
+                        className="px-3 py-1.5 rounded-lg bg-red-600 text-white font-mono text-[11px] font-semibold hover:bg-red-700 transition cursor-pointer flex-shrink-0 shadow-xs flex items-center gap-1.5 self-start sm:self-auto"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                        <span>Retry Sample Ingestion</span>
+                      </button>
+                    )}
                   </div>
                 )}
 

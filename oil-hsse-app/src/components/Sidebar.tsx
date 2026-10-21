@@ -52,7 +52,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { role, session, switchRole, logout } = useAuth();
+  const { role, session, logout } = useAuth();
   const { theme } = useTheme();
   const { openIngestionModal } = useSafety();
   const toast = useToast();
@@ -269,17 +269,6 @@ export default function Sidebar({
       icon: Bot,
     },
   ];
-
-  const handleRoleChange = (newRole: UserRole) => {
-    switchRole(newRole);
-    setIsRoleMenuOpen(false);
-    toast.info(
-      `Role Switched to ${newRole === 'ADMIN' ? 'Safety Lead (ADMIN)' : 'Field Observer (USER)'}`,
-      newRole === 'ADMIN'
-        ? 'Full administrative triage, override, and deletion rights granted.'
-        : 'Read-only surveillance mode active.'
-    );
-  };
 
   const handleLogout = () => {
     logout();
@@ -511,10 +500,10 @@ export default function Sidebar({
                 {!isCollapsed && (
                   <div className="flex flex-col min-w-0 text-left">
                     <span className="text-xs font-sans font-semibold text-app-primary truncate">
-                      {role === 'ADMIN' ? 'Safety Lead' : 'Field Observer'}
+                      {role === 'ADMIN' ? 'Admin' : 'User'}
                     </span>
                     <span className="text-[10px] font-mono text-app-muted truncate">
-                      {role === 'ADMIN' ? 'ROLE: ADMIN' : 'ROLE: OBSERVER'}
+                      {role === 'ADMIN' ? 'ROLE: ADMIN' : 'ROLE: USER'}
                     </span>
                   </div>
                 )}
@@ -559,7 +548,7 @@ export default function Sidebar({
                     </span>
                   </div>
                   <div className="text-[10px] text-app-muted mt-1">
-                    {role === 'ADMIN' ? 'Chief HSSE Supt. (Supervisory Authority)' : 'Field Observer (Surveillance Stream Only)'}
+                    {role === 'ADMIN' ? 'Admin' : 'User'}
                   </div>
                 </div>
 

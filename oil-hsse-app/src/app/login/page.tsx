@@ -14,7 +14,6 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
-import { UserRole } from '@/types/safety';
 import PublicShell from '@/components/PublicShell';
 import { HoverBorderGradient } from '@/components/ui/hover-border-gradient';
 import { ButtonSpinner } from '@/components/ui/Skeleton';
@@ -26,8 +25,6 @@ import {
   EyeOff,
   AlertCircle,
   CheckCircle2,
-  ShieldCheck,
-  ShieldAlert,
 } from 'lucide-react';
 
 // Map technical Supabase errors to plain, user-friendly messages
@@ -82,10 +79,10 @@ function LoginCardContent() {
   const searchParams = useSearchParams();
   const {
     isAuthenticated,
-    isRealAuthUser,
+    session,
     loginWithEmail,
     signUpWithEmail,
-    loginWithServerDemo,
+    setupIncomplete,
   } = useAuth();
   const toast = useToast();
 
@@ -98,8 +95,10 @@ function LoginCardContent() {
   // Form Fields
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   // Validation State
   const [touched, setTouched] = useState<{ [key: string]: boolean }>({});
@@ -111,19 +110,22 @@ function LoginCardContent() {
   // Element Refs for Focusing the First Invalid Field
   const emailInputRef = useRef<HTMLInputElement>(null);
   const passwordInputRef = useRef<HTMLInputElement>(null);
+  const confirmPasswordInputRef = useRef<HTMLInputElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
-  // Environment Demo Flag
-  const isDemoEnabled =
-    process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE === 'true' ||
-    process.env.NEXT_PUBLIC_ENABLE_DEMO_MODE === '1';
+  // If user has incomplete setup, display clear notice
+  useEffect(() => {
+    if (setupIncomplete) {
+      setFormAlert('Your account setup is incomplete. Please contact an administrator.');
+    }
+  }, [setupIncomplete]);
 
   // If already authenticated, redirect straight to dashboard or target
   useEffect(() => {
-    if (isAuthenticated && isRealAuthUser) {
+    if (isAuthenticated && session) {
       router.replace(targetRedirect);
     }
-  }, [isAuthenticated, isRealAuthUser, router, targetRedirect]);
+  }, [isAuthenticated, session, router, targetRedirect]);
 
   // Sync tab with URL parameter changes
   useEffect(() => {
@@ -139,13 +141,15 @@ function LoginCardContent() {
     setActiveTab(newTab);
     setFormAlert(null);
     setConfirmationNotice(null);
+    setConfirmPassword('');
     setErrors({});
     setTouched({});
     const newUrl = newTab === 'signup' ? '/login?mode=signup' : '/login';
     router.replace(newUrl, { scroll: false });
   };
 
-  const validateField = (field: string, value: string): string => {
+  const validateField = (field: string, value: string, currentPassword?: string): string => {
+    const pwToCompare = currentPassword !== undefined ? currentPassword : password;
     if (field === 'email') {
       if (!value.trim()) return 'Official email address is required.';
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())) {
@@ -155,6 +159,10 @@ function LoginCardContent() {
     if (field === 'password') {
       if (!value) return 'Password is required.';
       if (value.length < 8) return 'Password must be at least 8 characters.';
+    }
+    if (field === 'confirmPassword' && activeTab === 'signup') {
+      if (!value) return 'Please confirm your password.';
+      if (value !== pwToCompare) return "Passwords don't match";
     }
     if (field === 'fullName' && activeTab === 'signup') {
       if (!value.trim()) return 'Full name is required for personnel records.';
@@ -212,11 +220,12 @@ function LoginCardContent() {
     const nameErr = validateField('fullName', fullName);
     const emailErr = validateField('email', email);
     const passErr = validateField('password', password);
+    const confirmErr = validateField('confirmPassword', confirmPassword);
 
-    setTouched({ fullName: true, email: true, password: true });
-    setErrors({ fullName: nameErr, email: emailErr, password: passErr });
+    setTouched({ fullName: true, email: true, password: true, confirmPassword: true });
+    setErrors({ fullName: nameErr, email: emailErr, password: passErr, confirmPassword: confirmErr });
 
-    if (nameErr || emailErr || passErr) {
+    if (nameErr || emailErr || passErr || confirmErr) {
       setFormAlert('Please resolve the errors highlighted below.');
       if (nameErr && nameInputRef.current) {
         nameInputRef.current.focus();
@@ -224,6 +233,8 @@ function LoginCardContent() {
         emailInputRef.current.focus();
       } else if (passErr && passwordInputRef.current) {
         passwordInputRef.current.focus();
+      } else if (confirmErr && confirmPasswordInputRef.current) {
+        confirmPasswordInputRef.current.focus();
       }
       return;
     }
@@ -231,6 +242,7 @@ function LoginCardContent() {
     setFormAlert(null);
     setIsSubmitting(true);
 
+    // CRITICAL: The confirmPassword value is strictly for client verification and never sent anywhere
     const result = await signUpWithEmail(email, password, fullName);
     setIsSubmitting(false);
 
@@ -250,25 +262,6 @@ function LoginCardContent() {
     }
   };
 
-  const handleDemoLaunch = async (role: UserRole) => {
-    if (isSubmitting) return;
-    setIsSubmitting(true);
-    setFormAlert(null);
-
-    const result = await loginWithServerDemo(role);
-    setIsSubmitting(false);
-
-    if (result.success) {
-      toast.success(
-        'Demo session active',
-        `Authenticated as ${role === 'ADMIN' ? 'Chief HSSE Superintendent' : 'HSSE Field Observer'}.`
-      );
-      router.push(targetRedirect);
-    } else {
-      setFormAlert(result.error || 'Failed to establish demo session.');
-    }
-  };
-
   return (
     <div className="w-full max-w-[440px] mx-auto">
       {/* ── Solid Slightly Lifted Surface Card ────────────────────── */}
@@ -281,22 +274,27 @@ function LoginCardContent() {
           <p className="text-xs sm:text-sm text-neutral-400 mt-1.5 font-normal">
             {activeTab === 'signin'
               ? 'Access the SIF-Precursor Surveillance Console.'
-              : 'Register for upstream field observation access.'}
+              : 'Register for upstream safety access.'}
           </p>
         </div>
 
-        {/* ── Segmented Control with Sliding Indicator ────────────── */}
+        {/* ── Segmented Control with Uniform Inset and Indicator (Section 2) ── */}
         <div
           role="tablist"
           aria-label="Authentication Options"
-          className="relative p-1 bg-black/40 rounded-xl border border-white/10 grid grid-cols-2 mb-6"
+          className="relative p-1 h-[48px] bg-black/40 rounded-[12px] border border-white/10 grid grid-cols-2 mb-6"
         >
-          {/* Sliding Indicator (Animated via transform) */}
+          {/* Single Absolutely Positioned Indicator (4px uniform inset, 200ms transform) */}
           <div
             aria-hidden="true"
-            className={`absolute top-1 bottom-1 w-[calc(50%-4px)] bg-[#242426] rounded-lg shadow-xs border border-white/10 transition-transform duration-200 ease-out ${
-              activeTab === 'signin' ? 'translate-x-0' : 'translate-x-[calc(100%+8px)]'
-            }`}
+            style={{
+              left: 4,
+              top: 4,
+              bottom: 4,
+              width: 'calc((100% - 8px) / 2)',
+              transform: activeTab === 'signin' ? 'translateX(0)' : 'translateX(100%)',
+            }}
+            className="absolute bg-[#242426] rounded-[8px] border border-white/10 transition-transform duration-200 ease-out pointer-events-none"
           />
 
           {/* Tab 1: Sign in */}
@@ -306,11 +304,17 @@ function LoginCardContent() {
             id="tab-signin"
             aria-selected={activeTab === 'signin'}
             aria-controls="panel-signin"
+            tabIndex={0}
             onClick={() => handleTabSwitch('signin')}
-            className={`relative z-10 min-h-[38px] flex items-center justify-center py-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                handleTabSwitch('signup');
+              }
+            }}
+            className={`relative z-10 h-full flex items-center justify-center text-[14px] sm:text-[15px] font-semibold rounded-[8px] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#141416] ${
               activeTab === 'signin'
                 ? 'text-white'
-                : 'text-neutral-400 hover:text-neutral-200'
+                : 'text-neutral-300 hover:text-white'
             }`}
           >
             Sign in
@@ -323,11 +327,17 @@ function LoginCardContent() {
             id="tab-signup"
             aria-selected={activeTab === 'signup'}
             aria-controls="panel-signup"
+            tabIndex={0}
             onClick={() => handleTabSwitch('signup')}
-            className={`relative z-10 min-h-[38px] flex items-center justify-center py-2 text-xs font-semibold rounded-lg transition-colors cursor-pointer ${
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                handleTabSwitch('signin');
+              }
+            }}
+            className={`relative z-10 h-full flex items-center justify-center text-[14px] sm:text-[15px] font-semibold rounded-[8px] transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#141416] ${
               activeTab === 'signup'
                 ? 'text-white'
-                : 'text-neutral-400 hover:text-neutral-200'
+                : 'text-neutral-300 hover:text-white'
             }`}
           >
             Create account
@@ -640,11 +650,15 @@ function LoginCardContent() {
                   autoComplete="new-password"
                   value={password}
                   onChange={(e) => {
-                    setPassword(e.target.value);
-                    if (touched.password) {
+                    const newPass = e.target.value;
+                    setPassword(newPass);
+                    if (touched.password || touched.confirmPassword) {
                       setErrors((prev) => ({
                         ...prev,
-                        password: validateField('password', e.target.value),
+                        ...(touched.password ? { password: validateField('password', newPass) } : {}),
+                        ...(touched.confirmPassword
+                          ? { confirmPassword: validateField('confirmPassword', confirmPassword, newPass) }
+                          : {}),
                       }));
                     }
                   }}
@@ -665,6 +679,69 @@ function LoginCardContent() {
               {touched.password && errors.password && (
                 <p id="signup-password-error" className="text-xs text-rose-400 mt-1 font-sans">
                   {errors.password}
+                </p>
+              )}
+            </div>
+
+            {/* Confirm Password Field (Section 3) */}
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <label
+                  htmlFor="signup-confirm-password"
+                  className="block text-xs font-medium text-neutral-300"
+                >
+                  Confirm password
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                  aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                  className="text-[11px] text-neutral-400 hover:text-white transition-colors cursor-pointer flex items-center gap-1 focus-visible:outline-none focus-visible:underline"
+                >
+                  {showConfirmPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  <span>{showConfirmPassword ? 'Hide' : 'Show'}</span>
+                </button>
+              </div>
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-neutral-500">
+                  <Lock className="w-4 h-4" />
+                </div>
+                <input
+                  ref={confirmPasswordInputRef}
+                  id="signup-confirm-password"
+                  type={showConfirmPassword ? 'text' : 'password'}
+                  name="confirmPassword"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setConfirmPassword(val);
+                    if (touched.confirmPassword) {
+                      setErrors((prev) => ({
+                        ...prev,
+                        confirmPassword: validateField('confirmPassword', val),
+                      }));
+                    }
+                  }}
+                  onBlur={(e) => handleBlur('confirmPassword', e.target.value)}
+                  placeholder="Re-enter your password"
+                  aria-required="true"
+                  aria-invalid={Boolean(touched.confirmPassword && errors.confirmPassword)}
+                  aria-describedby={
+                    touched.confirmPassword && errors.confirmPassword
+                      ? 'signup-confirm-password-error'
+                      : undefined
+                  }
+                  className={`w-full min-h-[44px] pl-10 pr-3.5 rounded-xl bg-black/50 border text-xs text-white placeholder:text-neutral-500 outline-none transition-colors ${
+                    touched.confirmPassword && errors.confirmPassword
+                      ? 'border-rose-500 focus:ring-2 focus:ring-rose-500'
+                      : 'border-white/10 focus:border-[#2997FF] focus:ring-2 focus:ring-[#2997FF]'
+                  }`}
+                />
+              </div>
+              {touched.confirmPassword && errors.confirmPassword && (
+                <p id="signup-confirm-password-error" className="text-xs text-rose-400 mt-1 font-sans">
+                  {errors.confirmPassword}
                 </p>
               )}
             </div>
@@ -695,42 +772,6 @@ function LoginCardContent() {
               </HoverBorderGradient>
             </div>
           </form>
-        )}
-
-        {/* ── Demo Access (Shown Only If Demo Mode Flag & Credentials Exist) ─ */}
-        {isDemoEnabled && (
-          <div className="mt-6 pt-5 border-t border-white/10 text-left">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-medium text-neutral-300">
-                Evaluating this platform?
-              </span>
-              <span className="text-[10px] font-mono text-neutral-500">
-                Server sessions
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                disabled={isSubmitting}
-                onClick={() => handleDemoLaunch('ADMIN')}
-                className="min-h-[40px] px-3 py-2 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-1.5 text-xs font-medium text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-              >
-                <ShieldCheck className="w-3.5 h-3.5 text-blue-400" />
-                <span>Demo Admin</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={isSubmitting}
-                onClick={() => handleDemoLaunch('USER')}
-                className="min-h-[40px] px-3 py-2 rounded-full border border-white/10 bg-white/5 hover:bg-white/10 active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-1.5 text-xs font-medium text-neutral-300 hover:text-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-              >
-                <User className="w-3.5 h-3.5 text-neutral-400" />
-                <span>Demo User</span>
-              </button>
-            </div>
-          </div>
         )}
       </div>
     </div>
