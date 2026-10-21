@@ -15,9 +15,36 @@ import {
 } from '@/types/safety';
 import { getSupabaseClient } from '@/lib/supabase/client';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+/**
+ * Resolves the active API base URL.
+ * 1. Runtime on server (SSR / Route Handlers): Uses process.env.BACKEND_URL injected by Vercel Service Binding.
+ * 2. Explicit public environment variable: process.env.NEXT_PUBLIC_API_URL.
+ * 3. Client-side browser in unified Vercel deployment: Uses relative '/api' (routed to backend service via vercel.json).
+ * 4. Local dev fallback: 'http://localhost:8000/api'.
+ */
+export function getApiBase(): string {
+  if (typeof window === 'undefined') {
+    if (process.env.BACKEND_URL) {
+      const base = process.env.BACKEND_URL.replace(/\/+$/, '');
+      return `${base}/api`;
+    }
+    if (process.env.NEXT_PUBLIC_API_URL) {
+      return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
+    }
+    return 'http://localhost:8000/api';
+  }
+
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
+  }
+
+  return '/api';
+}
 
 class ApiClient {
+  private get apiBase(): string {
+    return getApiBase();
+  }
   private isAvailable: boolean | null = null;
   private lastCheck: number = 0;
 
@@ -60,7 +87,7 @@ class ApiClient {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 1200);
-      const res = await fetch(`${API_BASE}/health`, {
+      const res = await fetch(`${this.apiBase}/health`, {
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -98,7 +125,7 @@ class ApiClient {
       if (options?.pageSize) params.append('pageSize', String(options.pageSize));
 
       const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${API_BASE}/incidents?${params.toString()}`, {
+      const res = await fetch(`${this.apiBase}/incidents?${params.toString()}`, {
         headers: authHeaders,
       });
       if (!res.ok) return null;
@@ -118,7 +145,7 @@ class ApiClient {
 
     try {
       const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${API_BASE}/incidents/${id}`, {
+      const res = await fetch(`${this.apiBase}/incidents/${id}`, {
         headers: authHeaders,
       });
       if (!res.ok) return null;
@@ -143,7 +170,7 @@ class ApiClient {
 
     try {
       const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${API_BASE}/incidents`, {
+      const res = await fetch(`${this.apiBase}/incidents`, {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify(payload),
@@ -169,7 +196,7 @@ class ApiClient {
 
     try {
       const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${API_BASE}/incidents/${id}/confirm`, {
+      const res = await fetch(`${this.apiBase}/incidents/${id}/confirm`, {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({ reviewedBy, escalationNotes }),
@@ -195,7 +222,7 @@ class ApiClient {
 
     try {
       const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${API_BASE}/incidents/${id}/override`, {
+      const res = await fetch(`${this.apiBase}/incidents/${id}/override`, {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify({ reviewedBy, justification }),
@@ -232,7 +259,7 @@ class ApiClient {
       }
 
       const authHeaders = await this.getAuthHeaders(false); // multipart form boundary auto-set
-      const res = await fetch(`${API_BASE}/datasets/upload`, {
+      const res = await fetch(`${this.apiBase}/datasets/upload`, {
         method: 'POST',
         headers: authHeaders,
         body: formData,
@@ -259,7 +286,7 @@ class ApiClient {
 
     try {
       const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${API_BASE}/datasets`, {
+      const res = await fetch(`${this.apiBase}/datasets`, {
         headers: authHeaders,
       });
       if (!res.ok) return null;
@@ -279,7 +306,7 @@ class ApiClient {
 
     try {
       const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${API_BASE}/datasets/${id}`, {
+      const res = await fetch(`${this.apiBase}/datasets/${id}`, {
         method: 'DELETE',
         headers: authHeaders,
       });
@@ -298,7 +325,7 @@ class ApiClient {
 
     try {
       const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${API_BASE}/analytics/kpi`, {
+      const res = await fetch(`${this.apiBase}/analytics/kpi`, {
         headers: authHeaders,
       });
       if (!res.ok) return null;
@@ -316,7 +343,7 @@ class ApiClient {
     if (!isUp) return null;
 
     try {
-      const res = await fetch(`${API_BASE}/rules`);
+      const res = await fetch(`${this.apiBase}/rules`);
       if (!res.ok) return null;
       return await res.json();
     } catch {
