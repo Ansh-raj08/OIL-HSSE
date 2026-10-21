@@ -25,14 +25,24 @@ export interface UserProfile extends AuthSession {
 
 export type AuthStatus = 'loading' | 'unauthenticated' | 'authenticated';
 
+export interface AuthResult {
+  success: boolean;
+  error?: string;
+  code?: string;
+  message?: string;
+  rawError?: any;
+  hasSession?: boolean;
+}
+
 interface AuthContextType {
   session: UserProfile | null;
   role: UserRole | null;
   authStatus: AuthStatus;
   isAuthenticated: boolean;
   isAuthLoading: boolean;
-  loginWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  signUpWithEmail: (email: string, password: string, fullName: string) => Promise<{ success: boolean; error?: string; message?: string }>;
+  loginWithEmail: (email: string, password: string) => Promise<AuthResult>;
+  signUpWithEmail: (email: string, password: string, fullName: string) => Promise<AuthResult>;
+  resendConfirmationEmail: (email: string) => Promise<{ success: boolean; error?: string; code?: string }>;
   logout: () => Promise<void>;
   canEscalate: boolean;
   canOverride: boolean;
@@ -76,19 +86,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!client) return null;
 
     try {
-      const { data: profile, error } = await client
+      let { data: profile, error } = await client
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .maybeSingle();
+
+      // If not found by primary key id, fallback to matching by email (e.g. re-registered auth accounts with pre-existing profile)
+      if (!profile && userEmail) {
+        const { data: profileByEmail } = await client
+          .from('profiles')
+          .select('*')
+          .eq('email', userEmail.trim().toLowerCase())
+          .maybeSingle();
+        if (profileByEmail) {
+          console.info('[AuthContext] Matched profile by email for user:', userEmail);
+          profile = profileByEmail;
+        }
+      }
 
       if (error || !profile) {
         console.warn('[AuthContext] Profile row unreadable or missing for authenticated user:', error);
         return null;
       }
 
-      // Role must strictly be ADMIN or USER
-      const dbRole: UserRole = profile.role === 'ADMIN' ? 'ADMIN' : profile.role === 'USER' ? 'USER' : 'USER';
+      // Role must strictly be ADMIN or USER (read strictly from database profile)
+      const dbRole: UserRole = profile.role === 'ADMIN' ? 'ADMIN' : 'USER';
       const name = profile.full_name || profile.email?.split('@')[0] || userEmail.split('@')[0] || 'User';
       const basin = profile.basin || 'Assam Operational Basin';
       const designation = profile.designation || (dbRole === 'ADMIN' ? 'Chief HSSE Superintendent' : 'Safety Officer');
@@ -205,14 +228,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loginWithEmail = async (
     email: string,
     password: string
-  ): Promise<{ success: boolean; error?: string }> => {
+  ): Promise<AuthResult> => {
     setAuthStatus('loading');
     setSetupIncomplete(false);
     try {
       const client = getSupabaseClient();
       if (!client) {
         setAuthStatus('unauthenticated');
-        return { success: false, error: 'Authentication service is currently unavailable.' };
+        return {
+          success: false,
+          error: 'Authentication service is currently unavailable.',
+          code: 'service_unavailable',
+        };
       }
 
       const trimmedEmail = email.trim();
@@ -224,13 +251,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (error) {
         setSession(null);
         setAuthStatus('unauthenticated');
-        return { success: false, error: error.message };
+        return {
+          success: false,
+          error: error.message,
+          code: error.code || 'invalid_credentials',
+          rawError: error,
+        };
       }
 
       if (!data.user) {
         setSession(null);
         setAuthStatus('unauthenticated');
-        return { success: false, error: 'Authentication failed. No user record returned.' };
+        return {
+          success: false,
+          error: 'Authentication failed. No user record returned.',
+          code: 'user_not_found',
+        };
       }
 
       // Fetch user profile strictly from public.profiles
@@ -240,9 +276,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSession(null);
         setAuthStatus('unauthenticated');
         setSetupIncomplete(true);
+        console.warn('[AuthContext] User signed in but has no database profile row in public.profiles. ID:', data.user.id);
         return {
           success: false,
           error: 'Your account setup is incomplete. Please contact an administrator.',
+          code: 'account_setup_incomplete',
         };
       }
 
@@ -253,7 +291,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch (err: any) {
       setSession(null);
       setAuthStatus('unauthenticated');
-      return { success: false, error: err.message || 'An unexpected error occurred during login.' };
+      const errCode = err?.code || (err?.message?.includes('fetch') ? 'network_failure' : 'auth_error');
+      return {
+        success: false,
+        error: err.message || 'An unexpected error occurred during login.',
+        code: errCode,
+        rawError: err,
+      };
     }
   };
 
@@ -261,13 +305,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     email: string,
     password: string,
     fullName: string
-  ): Promise<{ success: boolean; error?: string; message?: string }> => {
+  ): Promise<AuthResult> => {
     setAuthStatus('loading');
     try {
       const client = getSupabaseClient();
       if (!client) {
         setAuthStatus('unauthenticated');
-        return { success: false, error: 'Authentication service is currently unavailable.' };
+        return {
+          success: false,
+          error: 'Authentication service is currently unavailable.',
+          code: 'service_unavailable',
+        };
       }
 
       const trimmedEmail = email.trim();
@@ -275,15 +323,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!trimmedEmail || !trimmedEmail.includes('@') || !trimmedEmail.includes('.')) {
         setAuthStatus('unauthenticated');
-        return { success: false, error: 'Please enter a valid official email address.' };
+        return {
+          success: false,
+          error: 'Please enter a valid official email address.',
+          code: 'validation_failed',
+        };
       }
       if (!password || password.length < 8) {
         setAuthStatus('unauthenticated');
-        return { success: false, error: 'Password must be at least 8 characters in length.' };
+        return {
+          success: false,
+          error: 'Password must be at least 8 characters in length.',
+          code: 'weak_password',
+        };
       }
       if (!trimmedName || trimmedName.length < 2) {
         setAuthStatus('unauthenticated');
-        return { success: false, error: 'Please enter your complete full name.' };
+        return {
+          success: false,
+          error: 'Please enter your complete full name.',
+          code: 'validation_failed',
+        };
       }
 
       const { data, error } = await client.auth.signUp({
@@ -298,30 +358,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (error) {
         setAuthStatus('unauthenticated');
-        return { success: false, error: error.message };
+        return {
+          success: false,
+          error: error.message,
+          code: error.code || 'signup_error',
+          rawError: error,
+        };
       }
 
       if (!data.user) {
         setAuthStatus('unauthenticated');
-        return { success: false, error: 'User registration could not be completed.' };
-      }
-
-      // Security Constraint: New self-service signups ALWAYS receive the 'USER' role
-      try {
-        await client.from('profiles').upsert(
-          {
-            id: data.user.id,
-            email: data.user.email || trimmedEmail,
-            full_name: trimmedName,
-            role: 'USER', // STRICT: ALWAYS USER
-            basin: 'Assam Operational Basin',
-            designation: 'Safety Officer',
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: 'id' }
-        );
-      } catch (upsertErr) {
-        console.warn('[AuthContext] Failed to upsert user profile:', upsertErr);
+        return {
+          success: false,
+          error: 'User registration could not be completed.',
+          code: 'user_not_found',
+        };
       }
 
       // If auto-confirm is enabled and a session is immediately issued
@@ -333,19 +384,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           purgeLegacyStorage();
           return {
             success: true,
+            hasSession: true,
             message: 'Account created successfully! Assigned User access.',
           };
         }
       }
 
+      // Email confirmation is enabled in Supabase; user must click verification link in email
       setAuthStatus('unauthenticated');
       return {
         success: true,
-        message: 'Account registered successfully! You may now sign in with your credentials.',
+        hasSession: false,
+        message: 'Account registered successfully! Check your email to confirm your account.',
       };
     } catch (err: any) {
       setAuthStatus('unauthenticated');
-      return { success: false, error: err.message || 'An unexpected error occurred during signup.' };
+      return {
+        success: false,
+        error: err.message || 'An unexpected error occurred during signup.',
+        code: err?.code || 'signup_error',
+        rawError: err,
+      };
+    }
+  };
+
+  const resendConfirmationEmail = async (
+    emailToResend: string
+  ): Promise<{ success: boolean; error?: string; code?: string }> => {
+    try {
+      const client = getSupabaseClient();
+      if (!client) {
+        return {
+          success: false,
+          error: 'Authentication service is currently unavailable.',
+          code: 'service_unavailable',
+        };
+      }
+      const { error } = await client.auth.resend({
+        type: 'signup',
+        email: emailToResend.trim(),
+      });
+      if (error) {
+        return {
+          success: false,
+          error: error.message,
+          code: error.code || 'resend_failed',
+        };
+      }
+      return { success: true };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err.message || 'Failed to resend confirmation email.',
+        code: 'network_failure',
+      };
     }
   };
 
@@ -383,6 +475,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAuthLoading,
         loginWithEmail,
         signUpWithEmail,
+        resendConfirmationEmail,
         logout,
         canEscalate,
         canOverride,

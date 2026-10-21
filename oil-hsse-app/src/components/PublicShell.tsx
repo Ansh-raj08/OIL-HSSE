@@ -77,7 +77,11 @@ export function PublicShell({ children, mode = 'landing', headerRight }: PublicS
         </header>
 
         {/* ── Main Dynamic Page Content ───────────────────────────── */}
-        <main className="relative z-10 w-full flex-1 flex flex-col items-center justify-center px-4 py-8 sm:py-12">
+        <main
+          className={`relative z-10 w-full flex-1 flex flex-col items-center px-4 ${
+            mode === 'login' ? 'justify-start pt-6 sm:pt-12 pb-12' : 'justify-center py-8 sm:py-12'
+          }`}
+        >
           {children}
         </main>
 
