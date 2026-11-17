@@ -7,8 +7,9 @@ import { useSafety } from '@/context/SafetyContext';
 import { DEMO_PREFILL_SCENARIOS } from '@/data/mockIncidents';
 import type { IncidentCategory } from '@/types/safety';
 import { analyzeNarrative } from '@/lib/logic-engine/analyzer';
-import { processCsvPipeline, CsvPipelineResult } from '@/lib/csv/pipeline';
-import { apiClient } from '@/lib/api/client';
+import { CsvPipelineResult } from '@/lib/csv/pipeline';
+import { apiClient, toUserError } from '@/lib/api/client';
+import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { RiskBadge } from '@/components/ui/badge';
 import {
@@ -63,6 +64,7 @@ export default function IngestionModal() {
     refreshIncidents,
   } = useSafety();
   const toast = useToast();
+  const { session, logout } = useAuth();
 
   const [activeTab, setActiveTab] = useState<'single' | 'csv'>('csv');
 
@@ -80,7 +82,8 @@ export default function IngestionModal() {
   const [csvFileName, setCsvFileName] = useState<string>('');
   const [csvParsing, setCsvParsing] = useState(false);
   const [csvResult, setCsvResult] = useState<CsvPipelineResult | null>(null);
-  const [csvError, setCsvError] = useState<string | null>(null);
+  const [csvError, setCsvError] = useState<{ message: string; reference: string } | null>(null);
+  const [singleError, setSingleError] = useState<{ message: string; reference: string } | null>(null);
   const [isReviewExpanded, setIsReviewExpanded] = useState<boolean>(false);
   const [processingStageIndex, setProcessingStageIndex] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -97,6 +100,7 @@ export default function IngestionModal() {
     setCsvParsing(false);
     setCsvResult(null);
     setCsvError(null);
+    setSingleError(null);
     setIsReviewExpanded(false);
     setProcessingStageIndex(0);
   };
@@ -127,6 +131,7 @@ export default function IngestionModal() {
   const handleSingleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!narrative.trim()) return;
+    setSingleError(null);
 
     try {
       const backendIncident = await apiClient.createIncident({
@@ -137,10 +142,6 @@ export default function IngestionModal() {
         basin: 'Assam Operational Basin',
       });
 
-      if (!backendIncident) {
-        throw new Error('Could not reach the server. Nothing was saved.');
-      }
-
       addIncident(backendIncident);
       await refreshIncidents();
       handleClose();
@@ -148,8 +149,13 @@ export default function IngestionModal() {
         'Observation Logged Successfully',
         `Recorded observation (ID: ${backendIncident.id}) in priority triage stream with SIF risk score of ${analysis.risk.score}/100.`
       );
-    } catch (err: any) {
-      toast.error('Submission Failed', err.message || 'Could not reach the server. Nothing was saved.');
+    } catch (err) {
+      const info = toUserError(err);
+      setSingleError({ message: info.message, reference: info.reference });
+      toast.error('Submission Failed', `${info.message} Reference: ${info.reference}`);
+      if (info.shouldSignInAgain) {
+        await logout();
+      }
     }
   };
 
@@ -164,17 +170,24 @@ export default function IngestionModal() {
     setCsvError(null);
     setCsvParsing(true);
     try {
-      const result = await apiClient.uploadCsv(file, file.name);
+      const result = await apiClient.uploadCsv(
+        file,
+        file.name,
+        session?.name || session?.email || 'Administrator'
+      );
       if (!result || !result.dataset?.id) {
-        throw new Error('Could not reach the server. Nothing was saved.');
+        throw new Error('Unexpected response');
       }
       setCsvResult(result);
       setCsvStep('QUALITY_REPORT');
       setIsReviewExpanded(false);
-    } catch (err: any) {
-      console.error('[IngestionModal] Server rejected CSV upload:', err);
-      setCsvError(err.message || 'Could not reach the server. Nothing was saved.');
+    } catch (err) {
+      const info = toUserError(err);
+      setCsvError({ message: info.message, reference: info.reference });
       setCsvResult(null);
+      if (info.shouldSignInAgain) {
+        await logout();
+      }
     } finally {
       setCsvParsing(false);
     }
@@ -187,20 +200,32 @@ export default function IngestionModal() {
     try {
       const response = await fetch('/sample-datasets/OIL_Assam_Field_Logs_Sample.csv');
       if (!response.ok) {
-        throw new Error('Could not load sample file from assets.');
+        setCsvError({
+          message: 'Could not load the sample CSV file.',
+          reference: `sample_asset_${response.status}`,
+        });
+        setCsvResult(null);
+        return;
       }
       const csvText = await response.text();
-      const result = await apiClient.uploadCsv(csvText, 'OIL_Assam_Field_Logs_Sample.csv');
+      const result = await apiClient.uploadCsv(
+        csvText,
+        'OIL_Assam_Field_Logs_Sample.csv',
+        session?.name || session?.email || 'Administrator'
+      );
       if (!result || !result.dataset?.id) {
-        throw new Error('Could not reach the server. Nothing was saved.');
+        throw new Error('Unexpected response');
       }
       setCsvResult(result);
       setCsvStep('QUALITY_REPORT');
       setIsReviewExpanded(false);
-    } catch (err: any) {
-      console.error('[IngestionModal] Error during sample upload:', err);
-      setCsvError(err.message || 'Could not reach the server. Nothing was saved.');
+    } catch (err) {
+      const info = toUserError(err);
+      setCsvError({ message: info.message, reference: info.reference });
       setCsvResult(null);
+      if (info.shouldSignInAgain) {
+        await logout();
+      }
     } finally {
       setCsvParsing(false);
     }
@@ -457,6 +482,21 @@ export default function IngestionModal() {
               </div>
             </div>
 
+            {singleError && (
+              <div
+                role="alert"
+                className="p-3 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex items-start gap-2.5"
+              >
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 text-red-600 dark:text-red-400 mt-0.5" />
+                <div>
+                  <p className="font-sans leading-relaxed font-medium">{singleError.message}</p>
+                  <p className="font-mono text-[11px] opacity-80 mt-0.5">
+                    Reference: {singleError.reference}
+                  </p>
+                </div>
+              </div>
+            )}
+
             {/* Modal Footer */}
             <div className="pt-2 flex items-center justify-end gap-3">
               <button
@@ -599,10 +639,18 @@ export default function IngestionModal() {
 
                 {/* Error Banner with Explicit Retry Action */}
                 {csvError && (
-                  <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-2.5">
-                      <AlertTriangle className="w-4 h-4 flex-shrink-0 text-red-600 dark:text-red-400" />
-                      <span className="font-sans leading-relaxed">{csvError}</span>
+                  <div
+                    role="alert"
+                    className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-800 text-xs text-red-700 dark:text-red-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="w-4 h-4 flex-shrink-0 text-red-600 dark:text-red-400 mt-0.5" />
+                      <div>
+                        <p className="font-sans leading-relaxed font-medium">{csvError.message}</p>
+                        <p className="font-mono text-[11px] opacity-80 mt-0.5">
+                          Reference: {csvError.reference}
+                        </p>
+                      </div>
                     </div>
                     {csvFile ? (
                       <button

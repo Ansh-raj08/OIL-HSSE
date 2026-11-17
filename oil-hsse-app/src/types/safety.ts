@@ -114,8 +114,8 @@ export interface SafetyContextType {
   setFilter: (filter: TriageFilter) => void;
   setSearchQuery: (query: string) => void;
   selectIncident: (incident: SafetyIncident | null) => void;
-  confirmAndEscalate: (incidentId: string, officerName?: string, notes?: string) => void;
-  overrideIncident: (incidentId: string, justification: string, officerName?: string) => void;
+  confirmAndEscalate: (incidentId: string, officerName?: string, notes?: string) => Promise<void>;
+  overrideIncident: (incidentId: string, justification: string, officerName?: string) => Promise<void>;
   addIncident: (incident: Omit<SafetyIncident, 'id' | 'timestamp' | 'validationStatus'>) => void;
   addBatchIncidents: (incidents: SafetyIncident[]) => void;
   commitDatasetIngestion: (payload: { incidents: SafetyIncident[]; dataset?: Dataset }) => void;

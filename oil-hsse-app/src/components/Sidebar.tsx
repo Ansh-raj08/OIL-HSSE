@@ -34,6 +34,7 @@ import {
   X,
   Radio,
   Bot,
+  Activity,
 } from 'lucide-react';
 import { FULL_VERSION_STRING } from '@/config/version';
 
@@ -268,6 +269,16 @@ export default function Sidebar({
       description: 'Intelligent Safety Assistant',
       icon: Bot,
     },
+    ...(role === 'ADMIN'
+      ? [
+          {
+            href: '/status',
+            label: 'System Status',
+            description: 'Deployment Diagnostics',
+            icon: Activity,
+          },
+        ]
+      : []),
   ];
 
   const handleLogout = () => {

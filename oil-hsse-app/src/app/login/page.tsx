@@ -115,6 +115,26 @@ function parseAuthError(rawError: string, rawCode?: string, rawErrObj?: any): Au
     };
   }
 
+  // 5b. Deployment misconfigured
+  if (code === 'deployment_misconfigured') {
+    return {
+      message: 'This deployment is misconfigured. Contact an administrator.',
+      code: 'deployment_misconfigured',
+    };
+  }
+
+  // 5c. Existing account on signup
+  if (
+    code === 'user_already_exists' ||
+    lowerMsg.includes('user already registered') ||
+    lowerMsg.includes('already exists')
+  ) {
+    return {
+      message: 'An account with this email already exists. Try signing in instead.',
+      code: 'user_already_exists',
+    };
+  }
+
   // 6. Network failure
   if (
     code === 'network_failure' ||
@@ -123,7 +143,7 @@ function parseAuthError(rawError: string, rawCode?: string, rawErrObj?: any): Au
     lowerMsg.includes('offline')
   ) {
     return {
-      message: 'Could not reach the server. Check your connection.',
+      message: 'Cannot reach the server. Check your connection and try again.',
       code: 'network_failure',
     };
   }

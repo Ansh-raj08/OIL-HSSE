@@ -12,7 +12,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useSafety } from '@/context/SafetyContext';
 import { useTimeFormat } from '@/context/TimeFormatContext';
 import { Dataset } from '@/types/safety';
-import { apiClient } from '@/lib/api/client';
+import { apiClient, toUserError } from '@/lib/api/client';
 import { DatasetsSkeleton, ButtonSpinner } from '@/components/ui/Skeleton';
 import { useToast } from '@/context/ToastContext';
 import {
@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 
 export default function DatasetsPage() {
-  const { role, canManageDatasets } = useAuth();
+  const { role, canManageDatasets, logout } = useAuth();
   const {
     datasets,
     openIngestionModal,
@@ -48,7 +48,7 @@ export default function DatasetsPage() {
   const [showQualityModal, setShowQualityModal] = useState(false);
   const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<{ message: string; reference: string } | null>(null);
 
   useEffect(() => {
     refreshDatasets();
@@ -71,10 +71,7 @@ export default function DatasetsPage() {
     setIsDeleting(true);
     setDeleteError(null);
     try {
-      const ok = await apiClient.deleteDataset(datasetToDelete.id);
-      if (!ok) {
-        throw new Error('Server could not delete dataset. Please verify backend connection and administrative privileges.');
-      }
+      await apiClient.deleteDataset(datasetToDelete.id);
       removeDataset(datasetToDelete.id);
       removeDatasetIncidents(datasetToDelete.id);
       await refreshDatasets();
@@ -88,10 +85,13 @@ export default function DatasetsPage() {
         `Removed "${deletedName}" from registry and purged associated records.`
       );
       setDatasetToDelete(null);
-    } catch (err: any) {
-      const errMsg = err.message || 'Failed to delete dataset.';
-      setDeleteError(errMsg);
-      toast.error('Failed to Delete Dataset', errMsg);
+    } catch (err) {
+      const info = toUserError(err);
+      setDeleteError({ message: info.message, reference: info.reference });
+      toast.error('Failed to Delete Dataset', `${info.message} Reference: ${info.reference}`);
+      if (info.shouldSignInAgain) {
+        await logout();
+      }
     } finally {
       setIsDeleting(false);
     }
@@ -508,8 +508,14 @@ export default function DatasetsPage() {
             </div>
 
             {deleteError && (
-              <div className="p-2.5 rounded-lg bg-red-50 dark:bg-red-950/80 border border-red-200 dark:border-red-800 text-xs text-red-700 dark:text-red-300">
-                {deleteError}
+              <div
+                role="alert"
+                className="p-2.5 rounded-lg bg-red-50 dark:bg-red-950/80 border border-red-200 dark:border-red-800 text-xs text-red-700 dark:text-red-300"
+              >
+                <p className="font-medium">{deleteError.message}</p>
+                <p className="font-mono text-[11px] opacity-80 mt-0.5">
+                  Reference: {deleteError.reference}
+                </p>
               </div>
             )}
 

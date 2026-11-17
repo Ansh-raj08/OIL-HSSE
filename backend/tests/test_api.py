@@ -40,13 +40,117 @@ def enable_in_memory_mode():
 
 
 def test_health_check():
-    """Health check must be open and return healthy system status."""
+    """Public health check returns minimal status only; detailed fields require an ADMIN token."""
+    # 1. Public call — minimal payload only (no version, counts, or database mode)
     response = client.get("/api/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "healthy"
-    assert "version" in data
-    assert "totalRecords" in data
+    assert data == {"status": "ok", "configured": True}
+    assert "version" not in data
+    assert "totalRecords" not in data
+    assert "databaseMode" not in data
+
+    # 2. USER token — still receives public minimal status only
+    user_res = client.get("/api/health", headers=USER_HEADERS)
+    assert user_res.status_code == 200
+    assert user_res.json() == {"status": "ok", "configured": True}
+
+    # 3. ADMIN token — receives detailed diagnostics
+    admin_res = client.get("/api/health", headers=ADMIN_HEADERS)
+    assert admin_res.status_code == 200
+    admin_data = admin_res.json()
+    assert admin_data["status"] == "ok"
+    assert admin_data["configured"] is True
+    assert "version" in admin_data
+    assert "totalRecords" in admin_data
+    assert "databaseMode" in admin_data
+    assert "liveQuery" in admin_data
+
+
+def test_misconfigured_backend_health_and_503():
+    """When Supabase env vars are missing, /api/health reports missing NAMES and data routes return 503 backend_misconfigured."""
+    from app.config import settings
+
+    prev_mem = settings.USE_IN_MEMORY_DB
+    prev_url = settings.SUPABASE_URL
+    prev_key = settings.SUPABASE_KEY
+    prev_srk = settings.SUPABASE_SERVICE_ROLE_KEY
+
+    try:
+        settings.USE_IN_MEMORY_DB = False
+        settings.SUPABASE_URL = ""
+        settings.SUPABASE_KEY = ""
+        settings.SUPABASE_SERVICE_ROLE_KEY = ""
+
+        health_res = client.get("/api/health")
+        assert health_res.status_code == 200
+        hdata = health_res.json()
+        assert hdata["configured"] is False
+        assert "SUPABASE_URL" in hdata["missing"]
+        assert "SUPABASE_SERVICE_ROLE_KEY" in hdata["missing"]
+
+        for method, path in [
+            ("GET", "/api/incidents"),
+            ("GET", "/api/datasets"),
+            ("POST", "/api/datasets/upload"),
+            ("GET", "/api/analytics/kpi"),
+        ]:
+            res = client.request(method, path)
+            assert res.status_code == 503
+            body = res.json()
+            assert body["code"] == "backend_misconfigured"
+            assert "requestId" in body
+    finally:
+        settings.USE_IN_MEMORY_DB = prev_mem
+        settings.SUPABASE_URL = prev_url
+        settings.SUPABASE_KEY = prev_key
+        settings.SUPABASE_SERVICE_ROLE_KEY = prev_srk
+
+
+def test_oversized_upload_returns_413():
+    """Uploads exceeding MAX_UPLOAD_BYTES are rejected early with HTTP 413 and file_too_large code."""
+    from app.config import settings
+
+    prev_max = settings.MAX_UPLOAD_BYTES
+    try:
+        settings.MAX_UPLOAD_BYTES = 256
+        oversized_csv = "site,narrative\n" + ("Duliajan,Worker at height without harness.\n" * 20)
+        res = client.post(
+            "/api/datasets/upload",
+            data={"raw_csv": oversized_csv, "filename": "too_big.csv"},
+            headers=ADMIN_HEADERS,
+        )
+        assert res.status_code == 413
+        body = res.json()
+        assert body["code"] == "file_too_large"
+        assert "requestId" in body
+    finally:
+        settings.MAX_UPLOAD_BYTES = prev_max
+
+
+def test_cors_preflight_allows_configured_origin_and_headers():
+    """CORS preflight allows configured origin + Authorization/Content-Type and blocks unknown origins."""
+    allowed_origin = "http://localhost:3000"
+    res_ok = client.options(
+        "/api/datasets/upload",
+        headers={
+            "Origin": allowed_origin,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Authorization, Content-Type",
+        },
+    )
+    assert res_ok.status_code == 200
+    assert res_ok.headers.get("access-control-allow-origin") == allowed_origin
+
+    res_bad = client.options(
+        "/api/datasets/upload",
+        headers={
+            "Origin": "https://evil-origin.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Authorization, Content-Type",
+        },
+    )
+    assert res_bad.headers.get("access-control-allow-origin") != "https://evil-origin.example"
 
 
 # ── SECTION 0: AUTHENTICATION & TOKEN VERIFICATION TESTS ────────────

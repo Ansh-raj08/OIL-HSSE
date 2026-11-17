@@ -142,31 +142,39 @@ export default function ExplainabilityConsole({ isOpen = true, onClose }: Explai
     escalationNotes,
   } = selectedIncident;
 
-  const handleConfirm = () => {
-    confirmAndEscalate(
-      id,
-      session?.name || 'Administrator (Chief HSSE Supt.)',
-      escalationNote ||
-        'High-energy SIF Precursor confirmed by Safety Superintendent. Stop-work advisory dispatched to Rig Floor.'
-    );
-    setShowEscalationSuccess(true);
-    toast.success(
-      `Incident ${id} Confirmed`,
-      'Verified as SIF Precursor. Emergency stop-work advisory logged and dispatched to Rig Floor.'
-    );
-    setTimeout(() => setShowEscalationSuccess(false), 4000);
+  const handleConfirm = async () => {
+    try {
+      await confirmAndEscalate(
+        id,
+        session?.name || 'Administrator',
+        escalationNote ||
+          'High-energy SIF Precursor confirmed by Safety Superintendent. Stop-work advisory dispatched to Rig Floor.'
+      );
+      setShowEscalationSuccess(true);
+      toast.success(
+        `Incident ${id} Confirmed`,
+        'Verified as SIF Precursor. Emergency stop-work advisory logged and dispatched to Rig Floor.'
+      );
+      setTimeout(() => setShowEscalationSuccess(false), 4000);
+    } catch {
+      // Honest error toast already dispatched by SafetyContext
+    }
   };
 
-  const handleOverrideSubmit = (e: React.FormEvent) => {
+  const handleOverrideSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!overrideReason.trim()) return;
-    overrideIncident(id, overrideReason.trim(), overrideOfficer || session?.name || 'Administrator');
-    toast.info(
-      `Technical Override Applied on ${id}`,
-      `Risk tier downgraded with formal supervisory justification by ${overrideOfficer || 'Administrator'}.`
-    );
-    setIsOverrideFormOpen(false);
-    setOverrideReason('');
+    try {
+      await overrideIncident(id, overrideReason.trim(), overrideOfficer || session?.name || 'Administrator');
+      toast.info(
+        `Technical Override Applied on ${id}`,
+        `Risk tier downgraded with formal supervisory justification by ${overrideOfficer || 'Administrator'}.`
+      );
+      setIsOverrideFormOpen(false);
+      setOverrideReason('');
+    } catch {
+      // Honest error toast already dispatched by SafetyContext
+    }
   };
 
   const getControlBadgeStyle = (level: ControlLevel) => {

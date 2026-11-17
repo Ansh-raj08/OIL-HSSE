@@ -6,6 +6,7 @@ import { ThemeProvider } from '@/context/ThemeContext';
 import { TimeFormatProvider } from '@/context/TimeFormatContext';
 import { ToastProvider } from '@/context/ToastContext';
 import PerformanceTelemetry from '@/components/PerformanceTelemetry';
+import DeploymentConfigGate from '@/components/DeploymentConfigGate';
 
 export const metadata: Metadata = {
   title: {
@@ -93,18 +94,20 @@ export default function RootLayout({
         />
       </head>
       <body className="min-h-screen bg-app-page text-app-primary antialiased selection:bg-[#0066CC]/20 selection:text-[#0066CC] dark:selection:text-[#2997FF] overflow-x-clip">
-        <AuthProvider>
-          <ThemeProvider>
-            <TimeFormatProvider>
-              <ToastProvider>
-                <SafetyProvider>
-                  <PerformanceTelemetry />
-                  {children}
-                </SafetyProvider>
-              </ToastProvider>
-            </TimeFormatProvider>
-          </ThemeProvider>
-        </AuthProvider>
+        <DeploymentConfigGate>
+          <AuthProvider>
+            <ThemeProvider>
+              <TimeFormatProvider>
+                <ToastProvider>
+                  <SafetyProvider>
+                    <PerformanceTelemetry />
+                    {children}
+                  </SafetyProvider>
+                </ToastProvider>
+              </TimeFormatProvider>
+            </ThemeProvider>
+          </AuthProvider>
+        </DeploymentConfigGate>
       </body>
     </html>
   );

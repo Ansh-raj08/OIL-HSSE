@@ -9,7 +9,7 @@ from typing import Optional
 from pydantic import BaseModel
 from fastapi import Header, HTTPException, Depends
 from app.config import settings
-from app.services.supabase_service import supabase_service
+from app.services.supabase_service import supabase_service, BackendMisconfiguredError
 
 
 class AuthenticatedUser(BaseModel):
@@ -28,9 +28,17 @@ async def get_current_user(
     Validates Bearer token cryptographically via Supabase Auth API,
     resolves the user ID, and strictly queries public.profiles using the
     service-role client to determine the user's authoritative role.
-    
+
     Ignores any X-User-Role or client-supplied role parameters.
+    If backend Supabase credentials are missing (and USE_IN_MEMORY_DB is false),
+    raises BackendMisconfiguredError -> HTTP 503 with code 'backend_misconfigured'.
     """
+    # Fail with 503 backend_misconfigured before auth checks if backend itself is unconfigured
+    if not settings.USE_IN_MEMORY_DB:
+        missing = supabase_service.get_missing_config_vars()
+        if missing:
+            raise BackendMisconfiguredError(missing)
+
     if not authorization:
         raise HTTPException(
             status_code=401,
@@ -54,7 +62,7 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # ── MOCK / ISOLATED IN-MEMORY DEV MODE SUPPORT ─────────────────────
+    # ── MOCK / ISOLATED IN-MEMORY DEV MODE SUPPORT (OPT-IN TESTS ONLY) ─
     if settings.USE_IN_MEMORY_DB:
         if token == "MOCK_EXPIRED_TOKEN":
             raise HTTPException(
@@ -88,39 +96,35 @@ async def get_current_user(
             )
 
     # ── PRODUCTION / SUPABASE VERIFICATION ─────────────────────────────
-    if not supabase_service.client:
-        raise HTTPException(
-            status_code=503,
-            detail="Service Unavailable: Supabase client is not connected.",
-        )
+    sb = supabase_service.get_client()
 
     try:
-        user_response = supabase_service.client.auth.get_user(token)
+        user_response = sb.auth.get_user(token)
         if not user_response or not user_response.user:
             raise ValueError("Token verification returned empty user payload.")
         user = user_response.user
-    except Exception as e:
+    except Exception:
         # Invalid, expired, forged, or malformed JWT token
         raise HTTPException(
             status_code=401,
-            detail=f"Unauthorized: Invalid or expired token ({str(e)}).",
+            detail="Unauthorized: Invalid or expired session token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     # Fetch authoritative role from public.profiles table using service role client
     try:
         profile_res = (
-            supabase_service.client.from_("profiles")
+            sb.from_("profiles")
             .select("*")
             .eq("id", user.id)
             .maybe_single()
             .execute()
         )
         profile = profile_res.data if profile_res else None
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to query user profile: {str(e)}",
+            detail="Failed to verify user profile.",
         )
 
     if not profile:
@@ -137,10 +141,26 @@ async def get_current_user(
         id=user.id,
         email=user.email or profile.get("email", ""),
         role=authoritative_role,
-        full_name=profile.get("full_name") or user.user_metadata.get("full_name") or "OIL HSSE Officer",
+        full_name=profile.get("full_name") or (user.user_metadata or {}).get("full_name") or "OIL HSSE Officer",
         designation=profile.get("designation"),
         basin=profile.get("basin") or "Assam Operational Basin",
     )
+
+
+async def try_get_admin_user(
+    authorization: Optional[str] = None,
+) -> Optional[AuthenticatedUser]:
+    """
+    Non-raising helper for /api/health: returns AuthenticatedUser only when
+    a valid ADMIN Bearer token is supplied; otherwise returns None.
+    """
+    if not authorization:
+        return None
+    try:
+        user = await get_current_user(authorization=authorization)
+        return user if user.role == "ADMIN" else None
+    except Exception:
+        return None
 
 
 async def require_authenticated_user(

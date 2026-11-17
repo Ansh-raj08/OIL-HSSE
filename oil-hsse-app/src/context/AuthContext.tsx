@@ -237,8 +237,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAuthStatus('unauthenticated');
         return {
           success: false,
-          error: 'Authentication service is currently unavailable.',
-          code: 'service_unavailable',
+          error: 'This deployment is misconfigured. Required Supabase settings are missing.',
+          code: 'deployment_misconfigured',
         };
       }
 
@@ -313,8 +313,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAuthStatus('unauthenticated');
         return {
           success: false,
-          error: 'Authentication service is currently unavailable.',
-          code: 'service_unavailable',
+          error: 'This deployment is misconfigured. Required Supabase settings are missing.',
+          code: 'deployment_misconfigured',
         };
       }
 
@@ -416,8 +416,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!client) {
         return {
           success: false,
-          error: 'Authentication service is currently unavailable.',
-          code: 'service_unavailable',
+          error: 'This deployment is misconfigured. Required Supabase settings are missing.',
+          code: 'deployment_misconfigured',
         };
       }
       const { error } = await client.auth.resend({

@@ -11,6 +11,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python)](https://python.org/)
 [![Supabase](https://img.shields.io/badge/Database-Supabase%20PostgreSQL-3ECF8E?style=for-the-badge&logo=supabase)](https://supabase.com/)
 [![Vercel Services](https://img.shields.io/badge/Deployment-Vercel%20Multi--Service-black?style=for-the-badge&logo=vercel)](https://vercel.com/)
+[![Tests](https://img.shields.io/badge/Tests-62%2F62%20Passing-brightgreen?style=for-the-badge&logo=pytest)](https://docs.pytest.org/)
 [![Compliance](https://img.shields.io/badge/Compliance-OISD%20%7C%20DGMS%20%7C%20IOGP-D4AF37?style=for-the-badge)]()
 
 **Smart India Hackathon (SIH) 2026** • **Problem Statement ID:** `SIH26165`  
@@ -197,7 +198,7 @@ flowchart TB
 | **Data Validation** | Pydantic | `v2.8+` | Strict schema validation for all incoming and outgoing payloads |
 | **Database & Auth** | Supabase (PostgreSQL) | `2.116.0` | Managed PostgreSQL with Row-Level Security (RLS) & Auth JWTs |
 | **Deployment Engine** | Vercel Multi-Service | Monorepo | Unified deployment routing frontend and backend under one project |
-| **Test Suite** | Pytest | `8.x` | Automated backend testing for NLP logic, RBAC, and APIs |
+| **Test Suite** | Pytest & Node Test Runner | `8.x` / `tsx 4.x` | Automated backend testing (38 tests) & frontend logic engine calibration (24 tests) |
 
 ---
 
@@ -209,21 +210,33 @@ OIL-HSSE/
 │   ├── app/
 │   │   ├── main.py                       # FastAPI application entrypoint & middleware
 │   │   ├── config.py                     # Environment configuration & Supabase settings
-│   │   ├── logic_engine/                 # Deterministic NLP, LSR, Negation & Escalation rules
-│   │   │   ├── escalation_evaluator.py   # 0-100 multi-factor escalation likelihood engine
-│   │   │   ├── rules_data.py             # 9 IOGP rules, keyword groups, and control sets
-│   │   │   └── rules_engine.py           # Core text parsing, scoring, and XAI weights
+│   │   ├── logic_engine/                 # Modular Deterministic NLP, LSR, Negation & Risk rules
+│   │   │   ├── analyzer.py               # Unified narrative NLP pipeline coordinator
+│   │   │   ├── escalation_evaluator.py   # 0–100 multi-factor escalation likelihood engine
+│   │   │   ├── lsr_mapper.py             # 9 IOGP Life-Saving Rules keyword mapping & classification
+│   │   │   ├── negation_detector.py      # Contextual syntactic negation parser (without, bypassed, not)
+│   │   │   ├── recommendation_generator.py # 4-tier Hierarchy of Controls (Elimination, Engineering, Admin, PPE)
+│   │   │   └── risk_scorer.py            # Deterministic 0–100 risk scoring & energy damage matrix
+│   │   ├── models/
+│   │   │   └── schemas.py                # Strict Pydantic schemas for incidents, rules, datasets, and auth
 │   │   ├── routers/                      # REST API endpoint routes
+│   │   │   ├── analytics.py              # Operational safety telemetry & risk distributions
 │   │   │   ├── auth.py                   # Role profile sessions (ADMIN vs USER)
 │   │   │   ├── datasets.py               # Dataset batch management & cascade deletion
 │   │   │   ├── incidents.py              # Incident queue, predict, confirm, and override
 │   │   │   └── rules.py                  # Live /api/rules endpoint for Guidelines tab
-│   │   ├── services/                     # Persistence & Supabase data abstraction
+│   │   ├── services/                     # Business logic & persistence abstractions
+│   │   │   ├── auth_service.py           # Supabase JWT token validation & role resolution
+│   │   │   ├── csv_service.py            # Batch CSV parsing, validation, and sanitization
+│   │   │   └── supabase_service.py       # Supabase Cloud PostgreSQL persistence & local fallback
 │   │   └── data/local_storage.json       # File-backed local disk storage fallback
 │   ├── tests/
-│   │   ├── test_api.py                   # Pytest test suite (API endpoints & RBAC)
-│   │   ├── test_logic_engine.py          # Unit tests for NLP parser & risk calculations
-│   │   └── test_upload_persistence.py    # Ingestion & storage persistence tests
+│   │   ├── conftest.py                   # Shared pytest fixtures & test configuration
+│   │   ├── fixtures/                     # Test datasets (e.g., 01_valid_basic.csv)
+│   │   ├── test_api.py                   # Pytest test suite (API endpoints, RBAC & cascade delete)
+│   │   ├── test_logic_engine.py          # Unit tests for NLP parser, negations & risk scoring
+│   │   └── test_upload_persistence.py    # Cloud & disk persistence lifecycle tests
+│   ├── main.py                           # Root Vercel ASGI entrypoint
 │   ├── requirements.txt                  # Python dependencies
 │   └── run.py                            # Local Uvicorn server launcher
 │
@@ -243,6 +256,9 @@ OIL-HSSE/
 │   │   │   ├── guidelines/               # Accordion-based IOGP LSR & Hierarchy reference
 │   │   │   └── login/                    # Unified authentication portal (ADMIN / USER)
 │   │   ├── components/                   # UI components
+│   │   │   ├── AppShell.tsx              # Authenticated layout wrapper & route protection guard
+│   │   │   ├── PublicShell.tsx           # Unauthenticated shell for login & landing
+│   │   │   ├── Sidebar.tsx               # Fixed & resizable desktop navigation with RAF pointer capture
 │   │   │   ├── Navigation.tsx            # Header, basin context, live clock, 12h/24h toggle
 │   │   │   ├── KpiRibbon.tsx             # 4-card operational KPI summary
 │   │   │   ├── TriageStream.tsx          # Full-width scannable incident queue with inline XAI
@@ -250,19 +266,28 @@ OIL-HSSE/
 │   │   │   ├── IndiaIncidentMap.tsx      # 100% offline Upper Assam SVG incident heatmap
 │   │   │   ├── IngestionModal.tsx        # 3-stage batch CSV upload & health report wizard
 │   │   │   ├── EscalationLikelihoodGauge.tsx # Heuristic escalation indicator
-│   │   │   └── ui/                       # IconMap, EmptyState, Badge, and primitives
-│   │   ├── context/                      # React Context providers (Safety, Auth, TimeFormat)
+│   │   │   ├── InferenceNetworkBackground.tsx # Lightweight 2D canvas ambient network
+│   │   │   └── ui/                       # IconMap, EmptyState, Badge, Skeleton, Spotlight, ThemeToggle
+│   │   ├── context/                      # React Context providers (Safety, Auth, TimeFormat, Theme, Toast)
 │   │   ├── hooks/                        # GSAP motion and responsive layout hooks
 │   │   ├── lib/                          # API client, CSV pipeline, normalizer, logic engine
 │   │   ├── config/version.ts             # Single source of truth for version (v2.6.0 · PR2)
 │   │   └── data/                         # Bundled India GeoJSON & E&P mock incident baselines
+│   ├── test/
+│   │   └── calibration.test.ts           # Frontend logic engine audit & calibration suite (24 tests)
 │   └── package.json                      # Frontend dependencies & npm scripts
+│
+├── scripts/                              # Verification & Diagnostic Automation
+│   ├── test_persistence_lifecycle.py     # End-to-end restart persistence & cascade deletion verifier
+│   └── verify_supabase.py                # Supabase schema & connectivity verification utility
 │
 ├── rest/
 │   └── API_CONTRACT.md                   # Formal REST API Contract Specification
+├── test_upload_demo_incidents.csv        # 10-row verified E&P sample incident dataset
 ├── vercel.json                           # Vercel Multi-Service Project Configuration
 ├── PROGRESS.md                           # Master Progress Record & Sprint Changelog
 ├── description.md                        # Technical System Description
+├── package.json                          # Root repository scripts (dev, backend)
 └── README.md                             # This file
 ```
 
@@ -313,7 +338,14 @@ npm run build
 ```
 > Open your browser and navigate to **`http://localhost:3000`**.
 
-### 3. Role-Based Access Credentials
+### 3. Root Convenience Shortcuts
+From the workspace root directory, you can also launch both services directly using top-level npm scripts:
+```bash
+npm run dev        # Launches the Next.js frontend (http://localhost:3000)
+npm run backend    # Launches the FastAPI backend (http://localhost:8000)
+```
+
+### 4. Role-Based Access Credentials
 The platform implements strict two-role authentication on the `/login` screen:
 - **`ADMIN` (Safety Superintendent / HSSE Lead):** Full supervisory authority to confirm SIF precursors, initiate stop-work orders, override flags with regulatory rationale, upload datasets, and delete batches.
 - **`USER` (Field Safety Observer / Stakeholder):** Read-only visibility across dashboards, analytics, and incident queues. Action buttons and decision controls are cleanly omitted.
@@ -381,11 +413,29 @@ The repository is configured for **Vercel Multi-Service Deployment** via `vercel
 }
 ```
 
+### Separate Vercel Frontend & Backend Deployment + Platform Limits
+
+When deploying the frontend (`Root Directory: oil-hsse-app`) and FastAPI backend (`Root Directory: backend`, entrypoint `main:app`, single `requirements.txt`) as separate Vercel projects:
+
+- **Frontend Project Environment Variables** (Production & Preview; validated at build time):
+  - `NEXT_PUBLIC_SUPABASE_URL` — Supabase project URL (`https://…supabase.co`)
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY` — Supabase publishable key (`sb_publishable_…`)
+  - `NEXT_PUBLIC_API_URL` — Deployed backend API base URL (`https://<backend-domain>/api`; `https://` required in production, never `localhost`)
+- **Backend Project Environment Variables**:
+  - `SUPABASE_URL` — Supabase project URL
+  - `SUPABASE_SERVICE_ROLE_KEY` — Supabase secret / service-role key (`sb_secret_…`)
+  - `CORS_ALLOWED_ORIGINS` — Exact frontend production origin (`https://<frontend-domain>`)
+  - `MAX_UPLOAD_BYTES` *(optional)* — Defaults to `4194304` (4 MB)
+- **Upload Payload Limit (Vercel Serverless):** CSV uploads are capped at **4 MB** (`4,194,304` bytes) and rejected early with HTTP `413` (`file_too_large`) so requests remain safely within Vercel's **4.5 MB** serverless request body limit.
+- **Admin Diagnostics:** Signed-in `ADMIN` users can visit `/status` to verify configuration booleans, backend reachability/latency, Supabase reachability, and app version without exposing secrets.
+
 ---
 
 ## 🧪 Verification & Automated Testing
 
-The backend includes a comprehensive **pytest** regression suite covering REST endpoints, NLP edge cases, negation parsing, server-side RBAC, and cascade deletions:
+The platform includes a **62-test comprehensive automated verification suite** across backend microservices (38 tests) and the frontend logic engine calibration suite (24 tests):
+
+### 1. Backend Microservices Test Suite (FastAPI + Pytest)
 
 ```bash
 cd backend
@@ -393,12 +443,34 @@ source .venv/bin/activate
 PYTHONPATH=. pytest tests/test_api.py tests/test_logic_engine.py -v
 ```
 
-### Key Test Coverage Highlights:
-- ✅ **NLP & Negation Logic:** Validates that *"without safety harness"* scores $\ge 85$ (Critical) while *"safety harness inspected with zero tears"* scores $\le 30$ (Low).
-- ✅ **Server-Side RBAC Enforcement:** Verifies that calling `POST /api/v1/incidents/{id}/confirm` or `/override` with `X-User-Role: USER` returns `403 Forbidden`.
+#### Key Backend Test Highlights:
+- ✅ **NLP & Negation Logic (24 unit tests):** Validates that *"without safety harness"* scores $\ge 85$ (Critical) while *"safety harness inspected with zero tears"* scores $\le 30$ (Low). Confirms all 9 IOGP rules, multi-negation detection, and hierarchy-of-controls generation.
+- ✅ **Server-Side RBAC Enforcement:** Verifies that calling `POST /api/v1/incidents/{id}/confirm` or `/override` with `X-User-Role: USER` returns `403 Forbidden`, while `ADMIN` role succeeds.
 - ✅ **Cascade Dataset Deletion:** Verifies that deleting a dataset purges all associated incidents from the queue while preserving an immutable record in `audit_logs`.
 - ✅ **Dynamic Rules Endpoint:** Tests that `GET /api/rules` serves all 9 IOGP rules and 4-tier hierarchy definitions directly from the logic engine.
 - ✅ **Escalation Heuristic:** Validates deterministic calculation of escalation tiers across high-energy and repeat incident fixtures.
+
+### 2. Frontend Logic Engine Audit & Calibration Suite (Node Test Runner)
+
+```bash
+cd oil-hsse-app
+npm test
+```
+
+#### Key Calibration Test Highlights:
+- ✅ **IOGP Life-Saving Rules Complete Coverage (11 tests):** Complete audit of LSR-01 through LSR-09 classifications, including subsea, sump pit, and high-tension whip variants.
+- ✅ **Safety Negation Phrase Detection (3 tests):** Detects multiple distinct clauses, positive phrasing differentiation, and upstream domain tokens (`missing`, `bypassed`, `failed to`).
+- ✅ **Risk Scorer Calibration & SIF Precursor Threshold (5 tests):** Validates high-energy + barrier compromises, multi-hazard 90+ saturation gradation, and tier cutoffs.
+- ✅ **Hierarchy-of-Controls Recommendations (3 tests):** Validates automatic generation of stop-work elimination orders, atmospheric watch controls, and exclusion zones.
+- ✅ **Unified Pipeline Integration (2 tests):** End-to-end `analyzeNarrative` tests generating triggers, XAI feature weights, and LSR mapping.
+
+### 3. Production Build Verification
+
+```bash
+cd oil-hsse-app
+npm run build
+```
+- ✅ Statically compiles all application routes with zero TypeScript or ESLint errors.
 
 ---
 

@@ -1,7 +1,7 @@
 # ============================================================
 # OIL HSSE ENTERPRISE SIF-PRECURSOR DECISION-SUPPORT PLATFORM
 # Incidents Router (FastAPI)
-# Strict Server-Side Authentication & RBAC (SIH26165)
+# Strict Server-Side Authentication, Write Verification & RBAC (SIH26165)
 # ============================================================
 
 from typing import Optional
@@ -13,7 +13,7 @@ from app.models.schemas import (
     OverrideIncidentRequest,
     GetIncidentsResponse,
 )
-from app.services.supabase_service import supabase_service
+from app.services.supabase_service import supabase_service, BackendMisconfiguredError
 from app.services.auth_service import (
     require_admin,
     require_authenticated_user,
@@ -57,7 +57,7 @@ async def get_incident(
 ):
     incident = await supabase_service.get_incident(incident_id)
     if not incident:
-        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
+        raise HTTPException(status_code=404, detail={"code": "incident_not_found", "message": f"Incident {incident_id} not found."})
     return incident
 
 
@@ -69,8 +69,15 @@ async def create_incident(
     try:
         incident = await supabase_service.create_incident(req)
         return incident
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except BackendMisconfiguredError:
+        raise
+    except ValueError as ve:
+        raise HTTPException(status_code=422, detail={"code": "invalid_incident", "message": str(ve)})
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "incident_write_failed", "message": "Failed to persist incident record."},
+        )
 
 
 @router.post("/{incident_id}/confirm", response_model=SafetyIncident)
@@ -86,10 +93,15 @@ async def confirm_incident(
             notes=req.escalationNotes,
         )
         return incident
+    except BackendMisconfiguredError:
+        raise
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=404, detail={"code": "incident_not_found", "message": f"Incident {incident_id} not found."})
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "confirm_write_failed", "message": "Failed to persist confirmation."},
+        )
 
 
 @router.post("/{incident_id}/override", response_model=SafetyIncident)
@@ -105,7 +117,12 @@ async def override_incident(
             justification=req.justification,
         )
         return incident
+    except BackendMisconfiguredError:
+        raise
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Incident {incident_id} not found")
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=404, detail={"code": "incident_not_found", "message": f"Incident {incident_id} not found."})
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "override_write_failed", "message": "Failed to persist override."},
+        )

@@ -28,6 +28,7 @@ import {
   X,
   ShieldCheck,
   Bot,
+  Activity,
 } from 'lucide-react';
 import { FULL_VERSION_STRING } from '@/config/version';
 
@@ -81,6 +82,7 @@ export default function Navigation() {
     { href: '/analytics', label: 'Analytics', icon: BarChart3 },
     { href: '/guidelines', label: 'Guidelines', icon: BookOpen },
     { href: '/chatbot', label: 'AI Chatbot', icon: Bot },
+    ...(role === 'ADMIN' ? [{ href: '/status', label: 'Status', icon: Activity }] : []),
   ];
 
   const handleLogout = () => {

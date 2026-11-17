@@ -1,9 +1,11 @@
 // ============================================================
 // OIL HSSE ENTERPRISE SIF-PRECURSOR DECISION-SUPPORT PLATFORM
 // FastAPI Backend Client (SIH26165)
-// Connects to Python FastAPI backend (http://localhost:8000/api)
-// Enforces strict Bearer Token Authorization from Supabase session.
-// Never sends client-dictated roles or X-User-Role headers.
+// - Reads API base URL strictly from src/config/env.ts (no localhost default in prod)
+// - Enforces strict Bearer Token Authorization from Supabase session
+// - Handles HTML / non-JSON responses safely without crashing
+// - 401: refreshes Supabase session once, retries once, then reports session expired
+// - Honest human error messages with short reference codes (never raw backend text)
 // ============================================================
 
 import {
@@ -11,104 +13,441 @@ import {
   Dataset,
   CsvPipelineResult,
   KpiMetrics,
-  IngestIncidentRequest,
 } from '@/types/safety';
 import { getSupabaseClient } from '@/lib/supabase/client';
+import { getPublicEnvConfig, MAX_UPLOAD_BYTES } from '@/config/env';
+
+export class ApiError extends Error {
+  public readonly code: string;
+  public readonly status: number;
+  public readonly reference: string;
+  public readonly shouldSignInAgain: boolean;
+
+  constructor(
+    message: string,
+    code: string,
+    status: number,
+    reference?: string,
+    shouldSignInAgain: boolean = false
+  ) {
+    super(message);
+    this.name = 'ApiError';
+    this.code = code;
+    this.status = status;
+    this.reference = reference || code;
+    this.shouldSignInAgain = shouldSignInAgain;
+  }
+}
+
+export interface BackendHealthProbeResult {
+  reachable: boolean;
+  httpStatus: number | null;
+  latencyMs: number;
+  configured: boolean | null;
+  missingVars: string[];
+  databaseMode: string | null;
+  supabaseReachable: boolean | null;
+  supabaseLatencyMs: number | null;
+  backendVersion: string | null;
+  datasetCount: number | null;
+  incidentCount: number | null;
+  maxUploadBytes: number | null;
+  errorMessage: string | null;
+  errorReference: string | null;
+}
 
 /**
- * Resolves the active API base URL.
- * 1. Runtime on server (SSR / Route Handlers): Uses process.env.BACKEND_URL injected by Vercel Service Binding.
- * 2. Explicit public environment variable: process.env.NEXT_PUBLIC_API_URL.
- * 3. Client-side browser in unified Vercel deployment: Uses relative '/api' (routed to backend service via vercel.json).
- * 4. Local dev fallback: 'http://localhost:8000/api'.
+ * Returns the validated API base URL from NEXT_PUBLIC_API_URL.
+ * Never defaults to localhost in production.
  */
 export function getApiBase(): string {
-  const isProd = process.env.NODE_ENV === 'production';
-
-  if (typeof window === 'undefined') {
-    if (process.env.BACKEND_URL) {
-      const base = process.env.BACKEND_URL.replace(/\/+$/, '');
-      return `${base}/api`;
-    }
-    if (process.env.NEXT_PUBLIC_API_URL) {
-      const val = process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
-      if (isProd && val.includes('localhost')) {
-        return '/api';
-      }
-      return val;
-    }
-    return isProd ? '/api' : 'http://localhost:8000/api';
+  const { apiBaseUrl, status } = getPublicEnvConfig();
+  if (!status.apiBaseUrlConfigured || !apiBaseUrl) {
+    throw new ApiError(
+      'This deployment is misconfigured. Required API settings are missing.',
+      'deployment_misconfigured',
+      0,
+      'deployment_misconfigured'
+    );
   }
+  return apiBaseUrl;
+}
 
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    const val = process.env.NEXT_PUBLIC_API_URL.replace(/\/+$/, '');
-    // In production, ignore any erroneous localhost setting to prevent calling visitor's machine
-    if (isProd && val.includes('localhost')) {
-      return '/api';
-    }
-    return val;
+/**
+ * Maps any thrown value to a safe user-facing message + short reference code.
+ * Never returns raw backend text.
+ */
+export function toUserError(err: unknown): {
+  message: string;
+  reference: string;
+  code: string;
+  shouldSignInAgain: boolean;
+} {
+  if (err instanceof ApiError) {
+    return {
+      message: err.message,
+      reference: err.reference,
+      code: err.code,
+      shouldSignInAgain: err.shouldSignInAgain,
+    };
   }
+  return {
+    message: 'Cannot reach the server.',
+    reference: 'network_or_cors_error',
+    code: 'network_or_cors_error',
+    shouldSignInAgain: false,
+  };
+}
 
-  return '/api';
+function mapKnownClientErrorCode(code: string): string {
+  switch (code) {
+    case 'csv_empty':
+      return 'The CSV file is empty or could not be parsed.';
+    case 'csv_missing_columns':
+      return 'The CSV file is missing a required narrative or description column.';
+    case 'invalid_csv':
+      return 'The uploaded CSV file could not be validated. Check the column headers and try again.';
+    case 'missing_file':
+      return 'No CSV file was provided for upload.';
+    case 'dataset_not_found':
+      return 'The requested dataset could not be found.';
+    case 'incident_not_found':
+      return 'The requested incident could not be found.';
+    case 'invalid_incident':
+      return 'The observation report is incomplete. Please review the required fields.';
+    default:
+      return 'The request could not be processed. Please check your input and try again.';
+  }
+}
+
+async function safeParseJson(res: Response): Promise<{ isJson: boolean; data: any }> {
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.includes('application/json')) {
+    return { isJson: false, data: null };
+  }
+  try {
+    const data = await res.json();
+    return { isJson: true, data };
+  } catch {
+    return { isJson: false, data: null };
+  }
 }
 
 class ApiClient {
-  private get apiBase(): string {
-    return getApiBase();
-  }
-  private isAvailable: boolean | null = null;
-  private lastCheck: number = 0;
+  private async getAccessToken(forceRefresh: boolean = false): Promise<string | null> {
+    const client = getSupabaseClient();
+    if (!client) return null;
 
-  /**
-   * Helper to retrieve the current Supabase session's access token,
-   * automatically handling token refresh via the Supabase client SDK.
-   */
-  private async getAuthHeaders(includeJson: boolean = true): Promise<Record<string, string>> {
-    const headers: Record<string, string> = {};
+    try {
+      if (forceRefresh) {
+        const { data, error } = await client.auth.refreshSession();
+        if (error || !data.session?.access_token) {
+          return null;
+        }
+        return data.session.access_token;
+      }
+
+      const { data: { session } } = await client.auth.getSession();
+      return session?.access_token ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async buildHeaders(includeJson: boolean, token: string | null): Promise<Record<string, string>> {
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+    };
     if (includeJson) {
       headers['Content-Type'] = 'application/json';
     }
-
-    try {
-      const client = getSupabaseClient();
-      if (client) {
-        const { data: { session } } = await client.auth.getSession();
-        if (session?.access_token) {
-          headers['Authorization'] = `Bearer ${session.access_token}`;
-          return headers;
-        }
-      }
-    } catch (err) {
-      console.warn('[ApiClient] Failed to acquire Supabase session token:', err);
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
-
     return headers;
   }
 
+  private async fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    timeoutMs: number
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        throw new ApiError(
+          'Cannot reach the server. The request timed out.',
+          'request_timeout',
+          0,
+          'request_timeout'
+        );
+      }
+      throw new ApiError(
+        'Cannot reach the server.',
+        'network_or_cors_error',
+        0,
+        'network_or_cors_error'
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /**
-   * Checks whether the Python FastAPI backend is responsive.
+   * Core authenticated request wrapper with:
+   * - Single automatic token refresh & retry on HTTP 401
+   * - Safe HTML / non-JSON handling (never crashes)
+   * - Honest human-readable error mapping with short reference codes (never raw backend text)
    */
-  async checkBackend(): Promise<boolean> {
-    const now = Date.now();
-    // Cache availability for 10 seconds to avoid spamming health endpoint
-    if (this.isAvailable !== null && now - this.lastCheck < 10000) {
-      return this.isAvailable;
+  private async request<T>(
+    path: string,
+    options: {
+      method?: string;
+      body?: BodyInit | null;
+      includeJson?: boolean;
+      timeoutMs?: number;
+      authenticated?: boolean;
+    } = {}
+  ): Promise<T> {
+    const {
+      method = 'GET',
+      body = null,
+      includeJson = true,
+      timeoutMs = 15000,
+      authenticated = true,
+    } = options;
+
+    const apiBase = getApiBase();
+    const url = `${apiBase}${path.startsWith('/') ? path : `/${path}`}`;
+
+    let token = authenticated ? await this.getAccessToken(false) : null;
+    let res = await this.fetchWithTimeout(
+      url,
+      {
+        method,
+        headers: await this.buildHeaders(includeJson, token),
+        body,
+      },
+      timeoutMs
+    );
+
+    // 401 Handling: attempt one session refresh and retry once
+    if (res.status === 401 && authenticated) {
+      const refreshedToken = await this.getAccessToken(true);
+      if (refreshedToken) {
+        token = refreshedToken;
+        res = await this.fetchWithTimeout(
+          url,
+          {
+            method,
+            headers: await this.buildHeaders(includeJson, token),
+            body,
+          },
+          timeoutMs
+        );
+      }
+    }
+
+    const headerRequestId = (res.headers.get('x-request-id') || '').trim();
+    const { isJson, data } = await safeParseJson(res);
+    const bodyCode = typeof data?.code === 'string' ? data.code : '';
+    const bodyRequestId = typeof data?.requestId === 'string' ? data.requestId : '';
+    const ref = bodyRequestId || headerRequestId || bodyCode || `http_${res.status}`;
+
+    if (!res.ok) {
+      if (res.status === 401) {
+        throw new ApiError(
+          'Your session has expired. Please sign in again.',
+          'session_expired',
+          401,
+          bodyRequestId || headerRequestId || 'session_expired',
+          true
+        );
+      }
+
+      if (res.status === 403) {
+        throw new ApiError(
+          'You do not have permission to perform this action.',
+          'forbidden',
+          403,
+          bodyRequestId || headerRequestId || 'forbidden'
+        );
+      }
+
+      if (res.status === 413) {
+        throw new ApiError(
+          'This file is too large. Maximum allowed upload size is 4 MB.',
+          'file_too_large',
+          413,
+          bodyRequestId || headerRequestId || 'file_too_large'
+        );
+      }
+
+      if (res.status === 503 && bodyCode === 'backend_misconfigured') {
+        throw new ApiError(
+          'The backend service is misconfigured. Contact an administrator.',
+          'backend_misconfigured',
+          503,
+          bodyRequestId || headerRequestId || 'backend_misconfigured'
+        );
+      }
+
+      if (res.status >= 500) {
+        throw new ApiError(
+          'The service is temporarily unavailable. Please try again.',
+          bodyCode || `http_${res.status}`,
+          res.status,
+          ref
+        );
+      }
+
+      throw new ApiError(
+        mapKnownClientErrorCode(bodyCode),
+        bodyCode || `http_${res.status}`,
+        res.status,
+        ref
+      );
+    }
+
+    // 2xx response must be JSON (HTML on 200 typically means Deployment Protection or misrouted URL)
+    if (!isJson || data === null) {
+      throw new ApiError(
+        'Cannot reach the server.',
+        'unexpected_html_response',
+        res.status,
+        headerRequestId || 'unexpected_html_response'
+      );
+    }
+
+    return data as T;
+  }
+
+  /**
+   * Probes GET /health with the current admin token for the /status diagnostics page.
+   * Never throws; safely handles HTML responses, CORS blocks, and network failures.
+   */
+  async probeAdminHealth(): Promise<BackendHealthProbeResult> {
+    const start = performance.now();
+    let apiBase = '';
+    try {
+      apiBase = getApiBase();
+    } catch (err) {
+      const info = toUserError(err);
+      return {
+        reachable: false,
+        httpStatus: null,
+        latencyMs: 0,
+        configured: false,
+        missingVars: [],
+        databaseMode: null,
+        supabaseReachable: null,
+        supabaseLatencyMs: null,
+        backendVersion: null,
+        datasetCount: null,
+        incidentCount: null,
+        maxUploadBytes: null,
+        errorMessage: info.message,
+        errorReference: info.reference,
+      };
     }
 
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1200);
-      const res = await fetch(`${this.apiBase}/health`, {
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      this.isAvailable = res.ok;
-      this.lastCheck = now;
-      return res.ok;
-    } catch {
-      this.isAvailable = false;
-      this.lastCheck = now;
-      return false;
+      const token = await this.getAccessToken(false);
+      const res = await this.fetchWithTimeout(
+        `${apiBase}/health`,
+        {
+          method: 'GET',
+          headers: await this.buildHeaders(false, token),
+        },
+        12000
+      );
+      const latencyMs = Math.round(performance.now() - start);
+      const headerRequestId = (res.headers.get('x-request-id') || '').trim();
+      const { isJson, data } = await safeParseJson(res);
+
+      if (!isJson || !data) {
+        return {
+          reachable: false,
+          httpStatus: res.status,
+          latencyMs,
+          configured: null,
+          missingVars: [],
+          databaseMode: null,
+          supabaseReachable: null,
+          supabaseLatencyMs: null,
+          backendVersion: null,
+          datasetCount: null,
+          incidentCount: null,
+          maxUploadBytes: null,
+          errorMessage: 'Cannot reach the server.',
+          errorReference: headerRequestId || 'unexpected_html_response',
+        };
+      }
+
+      if (!res.ok) {
+        return {
+          reachable: false,
+          httpStatus: res.status,
+          latencyMs,
+          configured: typeof data.configured === 'boolean' ? data.configured : null,
+          missingVars: Array.isArray(data.missing) ? data.missing : [],
+          databaseMode: null,
+          supabaseReachable: null,
+          supabaseLatencyMs: null,
+          backendVersion: null,
+          datasetCount: null,
+          incidentCount: null,
+          maxUploadBytes: null,
+          errorMessage: 'The service is temporarily unavailable. Please try again.',
+          errorReference: data.requestId || headerRequestId || `http_${res.status}`,
+        };
+      }
+
+      const liveQuery = data.liveQuery || null;
+      return {
+        reachable: true,
+        httpStatus: res.status,
+        latencyMs,
+        configured: typeof data.configured === 'boolean' ? data.configured : true,
+        missingVars: Array.isArray(data.missing) ? data.missing : [],
+        databaseMode: typeof data.databaseMode === 'string' ? data.databaseMode : null,
+        supabaseReachable:
+          typeof data.supabaseReachable === 'boolean'
+            ? data.supabaseReachable
+            : liveQuery
+              ? liveQuery.status === 'ok'
+              : null,
+        supabaseLatencyMs:
+          typeof liveQuery?.latencyMs === 'number' ? Math.round(liveQuery.latencyMs) : null,
+        backendVersion: typeof data.version === 'string' ? data.version : null,
+        datasetCount: typeof liveQuery?.datasetCount === 'number' ? liveQuery.datasetCount : null,
+        incidentCount: typeof liveQuery?.incidentCount === 'number' ? liveQuery.incidentCount : null,
+        maxUploadBytes: typeof data.maxUploadBytes === 'number' ? data.maxUploadBytes : null,
+        errorMessage: null,
+        errorReference: null,
+      };
+    } catch (err) {
+      const latencyMs = Math.round(performance.now() - start);
+      const info = toUserError(err);
+      return {
+        reachable: false,
+        httpStatus: null,
+        latencyMs,
+        configured: null,
+        missingVars: [],
+        databaseMode: null,
+        supabaseReachable: null,
+        supabaseLatencyMs: null,
+        backendVersion: null,
+        datasetCount: null,
+        incidentCount: null,
+        maxUploadBytes: null,
+        errorMessage: info.message,
+        errorReference: info.reference,
+      };
     }
   }
 
@@ -123,9 +462,6 @@ class ApiClient {
     page?: number;
     pageSize?: number;
   }): Promise<{ incidents: SafetyIncident[]; total: number } | null> {
-    const isUp = await this.checkBackend();
-    if (!isUp) return null;
-
     try {
       const params = new URLSearchParams();
       if (options?.category && options.category !== 'ALL') params.append('category', options.category);
@@ -135,14 +471,11 @@ class ApiClient {
       if (options?.page) params.append('page', String(options.page));
       if (options?.pageSize) params.append('pageSize', String(options.pageSize));
 
-      const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${this.apiBase}/incidents?${params.toString()}`, {
-        headers: authHeaders,
-      });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch (err) {
-      console.warn('[ApiClient] Failed to fetch incidents from backend:', err);
+      const qs = params.toString();
+      return await this.request<{ incidents: SafetyIncident[]; total: number }>(
+        `/incidents${qs ? `?${qs}` : ''}`
+      );
+    } catch {
       return null;
     }
   }
@@ -151,16 +484,8 @@ class ApiClient {
    * Fetches a single incident by ID.
    */
   async getIncident(id: string): Promise<SafetyIncident | null> {
-    const isUp = await this.checkBackend();
-    if (!isUp) return null;
-
     try {
-      const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${this.apiBase}/incidents/${id}`, {
-        headers: authHeaders,
-      });
-      if (!res.ok) return null;
-      return await res.json();
+      return await this.request<SafetyIncident>(`/incidents/${encodeURIComponent(id)}`);
     } catch {
       return null;
     }
@@ -168,6 +493,7 @@ class ApiClient {
 
   /**
    * Ingests a single observation report with backend AI/NLP inference.
+   * Throws ApiError on failure.
    */
   async createIncident(payload: {
     site: string;
@@ -175,145 +501,91 @@ class ApiClient {
     reportedBy: string;
     rawNarrative: string;
     basin?: string;
-  }): Promise<SafetyIncident | null> {
-    const isUp = await this.checkBackend();
-    if (!isUp) return null;
-
-    try {
-      const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${this.apiBase}/incidents`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
+  }): Promise<SafetyIncident> {
+    return await this.request<SafetyIncident>('/incidents', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   }
 
   /**
    * Executes supervisory Confirm & Escalate action.
-   * Authorization is strictly verified on backend via Bearer token -> profiles.role.
+   * Throws ApiError on failure.
    */
   async confirmIncident(
     id: string,
     reviewedBy: string,
     escalationNotes?: string
-  ): Promise<SafetyIncident | null> {
-    const isUp = await this.checkBackend();
-    if (!isUp) return null;
-
-    try {
-      const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${this.apiBase}/incidents/${id}/confirm`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({ reviewedBy, escalationNotes }),
-      });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
+  ): Promise<SafetyIncident> {
+    return await this.request<SafetyIncident>(`/incidents/${encodeURIComponent(id)}/confirm`, {
+      method: 'POST',
+      body: JSON.stringify({ reviewedBy, escalationNotes }),
+    });
   }
 
   /**
    * Executes supervisory Technical Override action.
-   * Authorization is strictly verified on backend via Bearer token -> profiles.role.
+   * Throws ApiError on failure.
    */
   async overrideIncident(
     id: string,
     reviewedBy: string,
     justification: string
-  ): Promise<SafetyIncident | null> {
-    const isUp = await this.checkBackend();
-    if (!isUp) return null;
-
-    try {
-      const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${this.apiBase}/incidents/${id}/override`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({ reviewedBy, justification }),
-      });
-      if (!res.ok) return null;
-      return await res.json();
-    } catch {
-      return null;
-    }
+  ): Promise<SafetyIncident> {
+    return await this.request<SafetyIncident>(`/incidents/${encodeURIComponent(id)}/override`, {
+      method: 'POST',
+      body: JSON.stringify({ reviewedBy, justification }),
+    });
   }
 
   /**
-   * Uploads and executes the full CSV ingestion pipeline on the Python backend:
-   * Parsing -> Validation -> Syntactic Cleaning -> Normalization -> SIF AI Inference
+   * Uploads and executes the full CSV ingestion pipeline on the Python backend.
+   * Rejects oversized files early (> 4 MB) and throws typed ApiError on any failure.
    */
   async uploadCsv(
     input: File | string,
     filename: string = 'uploaded_dataset.csv',
-    uploadedBy: string = 'T. Baruah (Chief HSSE Supt.)'
+    uploadedBy: string = 'Administrator'
   ): Promise<CsvPipelineResult> {
-    const inputName = typeof input === 'string' ? filename : (input.name || filename);
+    const byteSize =
+      typeof input === 'string'
+        ? new TextEncoder().encode(input).byteLength
+        : input.size;
 
-    const isUp = await this.checkBackend();
-    if (!isUp) {
-      const errMsg = `Could not reach the server at ${this.apiBase}. The backend is offline or unreachable. Nothing was saved.`;
-      console.error(`[ApiClient] Upload aborted: ${errMsg}`);
-      throw new Error(errMsg);
+    if (byteSize > MAX_UPLOAD_BYTES) {
+      throw new ApiError(
+        'This file is too large. Maximum allowed upload size is 4 MB.',
+        'file_too_large',
+        413,
+        'file_too_large'
+      );
     }
 
-    try {
-      const formData = new FormData();
-      if (typeof input === 'string') {
-        formData.append('raw_csv', input);
-        formData.append('filename', filename);
-        formData.append('uploaded_by', uploadedBy);
-      } else {
-        formData.append('file', input);
-        formData.append('filename', input.name || filename);
-        formData.append('uploaded_by', uploadedBy);
-      }
-
-      const authHeaders = await this.getAuthHeaders(false); // multipart form boundary auto-set
-      const res = await fetch(`${this.apiBase}/datasets/upload`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: formData,
-      });
-
-      if (!res.ok) {
-        let detail = `Server responded with HTTP ${res.status}: ${res.statusText}`;
-        try {
-          const errorJson = await res.json();
-          detail = errorJson.detail || errorJson.error || detail;
-        } catch {}
-        console.error(`[ApiClient] Backend CSV upload rejected: ${detail}`);
-        throw new Error(detail);
-      }
-
-      const data: CsvPipelineResult = await res.json();
-      return data;
-    } catch (err: any) {
-      console.warn('[ApiClient] Backend CSV upload failed:', err.message);
-      throw err;
+    const formData = new FormData();
+    if (typeof input === 'string') {
+      formData.append('raw_csv', input);
+      formData.append('filename', filename);
+      formData.append('uploaded_by', uploadedBy);
+    } else {
+      formData.append('file', input);
+      formData.append('filename', input.name || filename);
+      formData.append('uploaded_by', uploadedBy);
     }
+
+    return await this.request<CsvPipelineResult>('/datasets/upload', {
+      method: 'POST',
+      body: formData,
+      includeJson: false, // Let browser set multipart boundary
+      timeoutMs: 45000,
+    });
   }
 
   /**
    * Lists all datasets from the backend.
    */
   async getDatasets(): Promise<Dataset[] | null> {
-    const isUp = await this.checkBackend();
-    if (!isUp) return null;
-
     try {
-      const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${this.apiBase}/datasets`, {
-        headers: authHeaders,
-      });
-      if (!res.ok) return null;
-      return await res.json();
+      return await this.request<Dataset[]>('/datasets');
     } catch {
       return null;
     }
@@ -321,38 +593,20 @@ class ApiClient {
 
   /**
    * Deletes a dataset with cascade deletion of derived incidents.
-   * Requires ADMIN role verified on backend.
+   * Requires ADMIN role verified on backend. Throws ApiError on failure.
    */
-  async deleteDataset(id: string): Promise<boolean> {
-    const isUp = await this.checkBackend();
-    if (!isUp) return false;
-
-    try {
-      const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${this.apiBase}/datasets/${id}`, {
-        method: 'DELETE',
-        headers: authHeaders,
-      });
-      return res.ok;
-    } catch {
-      return false;
-    }
+  async deleteDataset(id: string): Promise<{ success: boolean }> {
+    return await this.request<{ success: boolean }>(`/datasets/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
   }
 
   /**
    * Fetches real-time KPI metrics.
    */
   async getKpiSummary(): Promise<KpiMetrics | null> {
-    const isUp = await this.checkBackend();
-    if (!isUp) return null;
-
     try {
-      const authHeaders = await this.getAuthHeaders();
-      const res = await fetch(`${this.apiBase}/analytics/kpi`, {
-        headers: authHeaders,
-      });
-      if (!res.ok) return null;
-      return await res.json();
+      return await this.request<KpiMetrics>('/analytics/kpi');
     } catch {
       return null;
     }
@@ -362,13 +616,8 @@ class ApiClient {
    * Fetches statutory rules and guidelines (IOGP LSR, Hierarchy of Controls, Negation Detection).
    */
   async getRules(): Promise<any | null> {
-    const isUp = await this.checkBackend();
-    if (!isUp) return null;
-
     try {
-      const res = await fetch(`${this.apiBase}/rules`);
-      if (!res.ok) return null;
-      return await res.json();
+      return await this.request<any>('/rules', { authenticated: false });
     } catch {
       return null;
     }

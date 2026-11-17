@@ -41,7 +41,9 @@ export async function supabaseListIncidents(options?: {
     }
 
     return data.map((row: any) => {
-      const an = row.incident_analysis || {};
+      const an = Array.isArray(row.incident_analysis)
+        ? row.incident_analysis[0] || {}
+        : row.incident_analysis || {};
       return {
         id: row.id,
         timestamp: row.timestamp,

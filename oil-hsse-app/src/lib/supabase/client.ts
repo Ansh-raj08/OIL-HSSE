@@ -1,48 +1,44 @@
 // ============================================================
 // OIL HSSE ENTERPRISE SIF-PRECURSOR DECISION-SUPPORT PLATFORM
-// Supabase Client Helper (with graceful local/demo fallback)
+// Supabase Client Helper (Single-Source Public Env Module)
 // ============================================================
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+import { getPublicEnvConfig } from '@/config/env';
 
 let clientInstance: SupabaseClient | null = null;
+let cachedSignature: string = '';
 
 /**
- * Checks whether Supabase environment variables are configured.
+ * Checks whether Supabase public environment variables are validly configured.
  */
 export function isSupabaseConfigured(): boolean {
-  return Boolean(
-    supabaseUrl &&
-    supabaseAnonKey &&
-    supabaseUrl !== 'https://your-project.supabase.co'
-  );
+  const { status } = getPublicEnvConfig();
+  return status.supabaseUrlConfigured && status.supabaseAnonKeyConfigured;
 }
 
 /**
- * Gets or initializes the Supabase client.
- * Returns null if Supabase environment variables are not configured,
- * enabling seamless offline/demo operation without throwing runtime crashes.
+ * Gets or initializes the Supabase browser client using the centralized env module.
+ * Returns null if Supabase environment variables are not configured.
  */
 export function getSupabaseClient(): SupabaseClient | null {
-  if (!isSupabaseConfigured()) {
+  const { supabaseUrl, supabaseAnonKey, status } = getPublicEnvConfig();
+  if (!status.supabaseUrlConfigured || !status.supabaseAnonKeyConfigured) {
     return null;
   }
 
-  if (!clientInstance) {
+  const signature = `${supabaseUrl}::${supabaseAnonKey}`;
+  if (!clientInstance || cachedSignature !== signature) {
     clientInstance = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
       },
     });
+    cachedSignature = signature;
   }
 
   return clientInstance;
 }
 
-export const supabase = isSupabaseConfigured()
-  ? createClient(supabaseUrl, supabaseAnonKey)
-  : null;
+export const supabase = getSupabaseClient();
