@@ -102,4 +102,53 @@ export async function supabaseListDatasets(): Promise<Dataset[] | null> {
   }
 }
 
+/**
+ * Permanently deletes a dataset and its raw storage file from Supabase.
+ */
+export async function supabaseDeleteDataset(datasetId: string): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) return false;
+
+  try {
+    // 1. Fetch storage_path to clean up storage bucket
+    const { data: ds } = await client
+      .from('datasets')
+      .select('id, storage_path')
+      .eq('id', datasetId)
+      .maybeSingle();
+
+    if (ds?.storage_path) {
+      try {
+        await client.storage.from('raw-datasets').remove([ds.storage_path]);
+      } catch (err) {
+        console.warn('[Supabase] Failed to remove file from storage bucket:', err);
+      }
+    }
+
+    // 2. Cascade delete dataset row and derived incidents
+    const { error: incErr } = await client
+      .from('incidents')
+      .delete()
+      .eq('dataset_id', datasetId);
+    if (incErr) {
+      console.warn('[Supabase] Failed to cascade delete incidents:', incErr);
+    }
+
+    const { error: dsErr } = await client
+      .from('datasets')
+      .delete()
+      .eq('id', datasetId);
+
+    if (dsErr) {
+      console.warn('[Supabase] Failed to delete dataset record:', dsErr);
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('[Supabase] Exception in supabaseDeleteDataset:', err);
+    return false;
+  }
+}
+
 

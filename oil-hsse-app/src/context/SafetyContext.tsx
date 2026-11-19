@@ -302,10 +302,10 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'SET_DATASETS', payload: DEFAULT_DEMO_DATASETS });
       return;
     }
-    // Direct Supabase read first (fast, resilient even during backend cold starts)
+    // Main App: Direct Supabase read first (fast, resilient even during backend cold starts)
     try {
       const supaRes = await supabaseListDatasets();
-      if (supaRes !== null && supaRes.length > 0) {
+      if (supaRes !== null) {
         dispatch({ type: 'SET_DATASETS', payload: supaRes });
         return;
       }
@@ -314,15 +314,13 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     }
     try {
       const apiRes = await apiClient.getDatasets();
-      if (apiRes !== null && apiRes.length > 0) {
+      if (apiRes !== null) {
         dispatch({ type: 'SET_DATASETS', payload: apiRes });
         return;
       }
     } catch (err) {
       console.warn('[SafetyContext] Backend getDatasets failed:', err);
     }
-    // Graceful fallback for empty environment or showcase readiness
-    dispatch({ type: 'SET_DATASETS', payload: DEFAULT_DEMO_DATASETS });
   }, [isAuthenticated, isDemoMode]);
 
   const refreshIncidents = useCallback(async () => {
@@ -331,10 +329,10 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
       dispatch({ type: 'SET_INCIDENTS', payload: MOCK_INCIDENTS });
       return;
     }
-    // Direct Supabase read first (fast, resilient even during backend cold starts)
+    // Main App: Direct Supabase read first (fast, resilient even during backend cold starts)
     try {
       const supabaseRes = await supabaseListIncidents({ limit: 100 });
-      if (supabaseRes !== null && supabaseRes.length > 0) {
+      if (supabaseRes !== null) {
         dispatch({ type: 'SET_INCIDENTS', payload: supabaseRes });
         return;
       }
@@ -343,15 +341,13 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     }
     try {
       const backendRes = await apiClient.getIncidents({ pageSize: 100 });
-      if (backendRes !== null && backendRes.incidents.length > 0) {
+      if (backendRes !== null) {
         dispatch({ type: 'SET_INCIDENTS', payload: backendRes.incidents });
         return;
       }
     } catch (err) {
       console.warn('[SafetyContext] Backend getIncidents failed:', err);
     }
-    // Graceful fallback for empty environment or showcase readiness
-    dispatch({ type: 'SET_INCIDENTS', payload: MOCK_INCIDENTS });
   }, [isAuthenticated, isDemoMode]);
 
   // Only load live incidents and datasets when the user is authenticated.

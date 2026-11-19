@@ -618,11 +618,14 @@ class SupabaseService:
         }
 
         if sb is not None:
-            res = sb.table("datasets").select("id, filename").eq("id", ds_uuid).maybe_single().execute()
+            res = sb.table("datasets").select("id, filename, storage_path").eq("id", ds_uuid).maybe_single().execute()
             if not res or not res.data:
                 raise ValueError(f"Dataset {dataset_id} not found.")
             filename = res.data.get("filename", dataset_id)
+            storage_path = res.data.get("storage_path")
             audit_entry["details"]["filename"] = filename
+            if storage_path:
+                audit_entry["details"]["storagePath"] = storage_path
 
             # Insert immutable audit log first and verify write
             audit_res = sb.table("audit_logs").insert({
@@ -636,6 +639,20 @@ class SupabaseService:
             }).execute()
             if not audit_res.data or len(audit_res.data) == 0:
                 raise RuntimeError("Database write into 'audit_logs' failed before dataset deletion.")
+
+            # Purge stored CSV file and its folder from Supabase Storage 'raw-datasets' bucket
+            try:
+                paths_to_remove = []
+                if storage_path:
+                    paths_to_remove.append(storage_path)
+                folder_items = sb.storage.from_("raw-datasets").list(ds_uuid)
+                if folder_items:
+                    for item in folder_items:
+                        paths_to_remove.append(f"{ds_uuid}/{item['name']}")
+                if paths_to_remove:
+                    sb.storage.from_("raw-datasets").remove(list(set(paths_to_remove)))
+            except Exception as st_err:
+                print(f"[SupabaseService] Storage cleanup warning: {st_err}")
 
             # Cascade delete derived incidents and dataset row, verifying deletion
             del_inc_res = sb.table("incidents").delete().eq("dataset_id", ds_uuid).execute()

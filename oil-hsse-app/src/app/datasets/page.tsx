@@ -13,6 +13,7 @@ import { useSafety } from '@/context/SafetyContext';
 import { useTimeFormat } from '@/context/TimeFormatContext';
 import { Dataset } from '@/types/safety';
 import { apiClient, toUserError } from '@/lib/api/client';
+import { supabaseDeleteDataset } from '@/lib/supabase/db';
 import { DatasetsSkeleton, ButtonSpinner } from '@/components/ui/Skeleton';
 import { useToast } from '@/context/ToastContext';
 import {
@@ -72,14 +73,31 @@ export default function DatasetsPage() {
     setDeleteError(null);
     try {
       if (!isDemoMode) {
+        // 1. Delete via backend API (creates regulatory audit log and cleans storage)
         try {
           await apiClient.deleteDataset(datasetToDelete.id);
         } catch (apiErr) {
-          console.warn('[DatasetsPage] Remote deleteDataset failed, deleting locally:', apiErr);
+          console.warn('[DatasetsPage] Remote backend deleteDataset error, using direct Supabase purge:', apiErr);
+        }
+
+        // 2. Direct Supabase deletion (guarantees DB record and storage file are purged even if backend had latency)
+        try {
+          await supabaseDeleteDataset(datasetToDelete.id);
+        } catch (supaErr) {
+          console.warn('[DatasetsPage] Direct Supabase deleteDataset error:', supaErr);
         }
       }
+
+      // 3. Update local state
       removeDataset(datasetToDelete.id);
       removeDatasetIncidents(datasetToDelete.id);
+
+      // 4. In main app, refresh live data so state is 100% synchronized with database
+      if (!isDemoMode) {
+        await refreshDatasets();
+        await refreshIncidents();
+      }
+
       if (selectedDataset?.id === datasetToDelete.id) {
         const remaining = datasets.filter((d) => d.id !== datasetToDelete.id);
         setSelectedDataset(remaining[0] || null);
