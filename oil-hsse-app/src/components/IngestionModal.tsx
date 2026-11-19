@@ -162,6 +162,7 @@ export default function IngestionModal() {
             rawNarrative: narrative.trim(),
             basin: 'Assam Operational Basin',
           });
+          await refreshIncidents();
         } catch (apiErr) {
           console.warn('[IngestionModal] Remote incident creation error, local incident preserved:', apiErr);
         }
@@ -302,11 +303,13 @@ export default function IngestionModal() {
             incidents: csvResult.incidents,
             dataset: csvResult.dataset,
           });
-          try {
-            await refreshDatasets();
-            await refreshIncidents();
-          } catch (e) {
-            console.error('[IngestionModal] Refetch after commit failed:', e);
+          if (!isDemoMode) {
+            try {
+              await refreshDatasets();
+              await refreshIncidents();
+            } catch (e) {
+              console.error('[IngestionModal] Refetch after commit failed:', e);
+            }
           }
           handleClose();
           toast.success(

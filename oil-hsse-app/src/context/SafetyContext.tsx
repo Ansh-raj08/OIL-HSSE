@@ -299,7 +299,7 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
   const refreshDatasets = useCallback(async () => {
     if (!isAuthenticated) return;
     if (isDemoMode) {
-      dispatch({ type: 'SET_DATASETS', payload: DEFAULT_DEMO_DATASETS });
+      // Demo mode operates strictly in memory; preserve in-session uploaded or deleted datasets
       return;
     }
     // Main App: Direct Supabase read first (fast, resilient even during backend cold starts)
@@ -326,7 +326,7 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
   const refreshIncidents = useCallback(async () => {
     if (!isAuthenticated) return;
     if (isDemoMode) {
-      dispatch({ type: 'SET_INCIDENTS', payload: MOCK_INCIDENTS });
+      // Demo mode operates strictly in memory; preserve in-session incident changes
       return;
     }
     // Main App: Direct Supabase read first (fast, resilient even during backend cold starts)
@@ -367,7 +367,12 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
 
     async function loadData() {
       try {
-        await Promise.all([refreshIncidents(), refreshDatasets()]);
+        if (isDemoMode) {
+          dispatch({ type: 'SET_DATASETS', payload: DEFAULT_DEMO_DATASETS });
+          dispatch({ type: 'SET_INCIDENTS', payload: MOCK_INCIDENTS });
+        } else {
+          await Promise.all([refreshIncidents(), refreshDatasets()]);
+        }
       } finally {
         if (isMounted) {
           dispatch({ type: 'SET_LOADING', payload: false });
@@ -378,7 +383,7 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     return () => {
       isMounted = false;
     };
-  }, [isAuthenticated, isAuthLoading, refreshIncidents, refreshDatasets]);
+  }, [isAuthenticated, isAuthLoading, isDemoMode, refreshIncidents, refreshDatasets]);
 
 
   // Real-time KPI calculations
