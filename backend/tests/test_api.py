@@ -39,6 +39,16 @@ def enable_in_memory_mode():
     settings.USE_IN_MEMORY_DB = prev
 
 
+def test_root_route():
+    """Root route returns 200 with service information and links to health and docs."""
+    response = client.get("/")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["health"] == "/api/health"
+    assert data["docs"] == "/docs"
+
+
 def test_health_check():
     """Public health check returns minimal status only; detailed fields require an ADMIN token."""
     # 1. Public call — minimal payload only (no version, counts, or database mode)

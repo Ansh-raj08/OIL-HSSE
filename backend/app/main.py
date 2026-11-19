@@ -132,6 +132,18 @@ for prefix in ["/api", "/api/v1"]:
     app.include_router(rules_router, prefix=prefix)
 
 
+@app.get("/")
+async def root():
+    """Root route providing service info and links to health and docs."""
+    return {
+        "status": "ok",
+        "service": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "health": "/api/health",
+        "docs": "/docs",
+    }
+
+
 @app.get("/api/health")
 @app.get("/api/v1/health")
 async def health_check(
