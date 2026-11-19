@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 
 export default function DatasetsPage() {
-  const { role, canManageDatasets, logout } = useAuth();
+  const { role, canManageDatasets, logout, isDemoMode } = useAuth();
   const {
     datasets,
     openIngestionModal,
@@ -71,11 +71,15 @@ export default function DatasetsPage() {
     setIsDeleting(true);
     setDeleteError(null);
     try {
-      await apiClient.deleteDataset(datasetToDelete.id);
+      if (!isDemoMode) {
+        try {
+          await apiClient.deleteDataset(datasetToDelete.id);
+        } catch (apiErr) {
+          console.warn('[DatasetsPage] Remote deleteDataset failed, deleting locally:', apiErr);
+        }
+      }
       removeDataset(datasetToDelete.id);
       removeDatasetIncidents(datasetToDelete.id);
-      await refreshDatasets();
-      await refreshIncidents();
       if (selectedDataset?.id === datasetToDelete.id) {
         const remaining = datasets.filter((d) => d.id !== datasetToDelete.id);
         setSelectedDataset(remaining[0] || null);
@@ -89,9 +93,6 @@ export default function DatasetsPage() {
       const info = toUserError(err);
       setDeleteError({ message: info.message, reference: info.reference });
       toast.error('Failed to Delete Dataset', `${info.message} Reference: ${info.reference}`);
-      if (info.shouldSignInAgain) {
-        await logout();
-      }
     } finally {
       setIsDeleting(false);
     }

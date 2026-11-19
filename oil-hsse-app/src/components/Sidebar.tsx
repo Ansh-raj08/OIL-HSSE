@@ -53,7 +53,7 @@ export default function Sidebar({
 }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { role, session, logout } = useAuth();
+  const { role, session, logout, isDemoMode, switchDemoRole } = useAuth();
   const { theme } = useTheme();
   const { openIngestionModal } = useSafety();
   const toast = useToast();
@@ -559,9 +559,45 @@ export default function Sidebar({
                     </span>
                   </div>
                   <div className="text-[10px] text-app-muted mt-1">
-                    {role === 'ADMIN' ? 'Admin' : 'User'}
+                    {role === 'ADMIN' ? 'Chief HSSE Superintendent' : 'Field HSSE Observer'}
                   </div>
                 </div>
+
+                {isDemoMode && (
+                  <div className="px-3 py-2 border-b border-app-subtle bg-emerald-500/5">
+                    <div className="text-[10px] font-mono text-emerald-400 font-bold uppercase mb-1.5 flex items-center justify-between">
+                      <span className="flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Demo Mode
+                      </span>
+                      <span className="text-[9px] bg-emerald-500/20 px-1 rounded text-emerald-300">RBAC Toggle</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => switchDemoRole('ADMIN')}
+                        className={`px-2 py-1 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                          role === 'ADMIN'
+                            ? 'bg-amber-500 text-black shadow-xs font-black'
+                            : 'bg-app-elevated text-app-secondary hover:text-app-primary'
+                        }`}
+                      >
+                        Admin
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => switchDemoRole('USER')}
+                        className={`px-2 py-1 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                          role === 'USER'
+                            ? 'bg-blue-500 text-white shadow-xs font-black'
+                            : 'bg-app-elevated text-app-secondary hover:text-app-primary'
+                        }`}
+                      >
+                        User
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <button
                   type="button"

@@ -36,7 +36,7 @@ export default function Navigation() {
   const pathname = usePathname();
   const router = useRouter();
   const { openIngestionModal } = useSafety();
-  const { session, role, logout } = useAuth();
+  const { session, role, logout, isDemoMode, switchDemoRole } = useAuth();
   const { timeFormat, setTimeFormat } = useTimeFormat();
   const [timeString, setTimeString] = useState('');
   const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
@@ -124,6 +124,12 @@ export default function Navigation() {
             <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold text-[#D4AF37] bg-[#1E293B]/80 border border-[#D4AF37]/30 tracking-tight select-none hidden lg:inline">
               {FULL_VERSION_STRING}
             </span>
+            {isDemoMode && (
+              <span className="ml-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 flex items-center gap-1 select-none">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                DEMO MODE
+              </span>
+            )}
           </div>
         </div>
 
@@ -198,9 +204,45 @@ export default function Navigation() {
                     </span>
                   </div>
                   <div className="text-[10px] text-slate-500 mt-1">
-                    {role === 'ADMIN' ? 'Admin' : 'User'}
+                    {role === 'ADMIN' ? 'Chief HSSE Superintendent' : 'Field HSSE Observer'}
                   </div>
                 </div>
+
+                {isDemoMode && (
+                  <div className="p-2.5 border-b border-[#1E293B] bg-emerald-500/5">
+                    <div className="text-[10px] font-mono text-emerald-400 font-bold uppercase mb-1.5 flex items-center justify-between">
+                      <span className="flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Demo Mode Active
+                      </span>
+                      <span className="text-[9px] bg-emerald-500/20 px-1 rounded text-emerald-300">RBAC Switcher</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => switchDemoRole('ADMIN')}
+                        className={`px-2 py-1.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                          role === 'ADMIN'
+                            ? 'bg-[#D4AF37] text-black shadow-xs font-black'
+                            : 'bg-[#151D2E] text-slate-300 hover:bg-[#1E293B]'
+                        }`}
+                      >
+                        Admin Mode
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => switchDemoRole('USER')}
+                        className={`px-2 py-1.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                          role === 'USER'
+                            ? 'bg-blue-500 text-white shadow-xs font-black'
+                            : 'bg-[#151D2E] text-slate-300 hover:bg-[#1E293B]'
+                        }`}
+                      >
+                        User Mode
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <button
                   onClick={handleLogout}

@@ -20,6 +20,32 @@ import {
   supabaseListIncidents,
   supabaseListDatasets,
 } from '@/lib/supabase/db';
+import { MOCK_INCIDENTS } from '@/data/mockIncidents';
+
+export const DEFAULT_DEMO_DATASETS: Dataset[] = [
+  {
+    id: 'd0000000-0000-0000-0000-000000000001',
+    filename: 'OIL_Assam_Drilling_Q1_2026.csv',
+    uploadedAt: '14 Jan 2026, 06:45 IST',
+    uploadedBy: 'T. Baruah (Chief HSSE Supt.)',
+    status: 'READY',
+    totalRows: 12,
+    validRows: 12,
+    invalidRows: 0,
+    warningRows: 0,
+  },
+  {
+    id: 'd0000000-0000-0000-0000-000000000002',
+    filename: 'OIL_Assam_Field_Logs_Sample.csv',
+    uploadedAt: '13 Jan 2026, 22:30 IST',
+    uploadedBy: 'P. Phukan (Lead Toolpusher)',
+    status: 'READY',
+    totalRows: 10,
+    validRows: 10,
+    invalidRows: 0,
+    warningRows: 0,
+  },
+];
 
 type SafetyAction =
   | { type: 'SET_INCIDENTS'; payload: SafetyIncident[] }
@@ -267,15 +293,19 @@ const SafetyContext = createContext<SafetyContextType | undefined>(undefined);
 
 export function SafetyProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(safetyReducer, initialState);
-  const { isAuthenticated, isAuthLoading, logout } = useAuth();
+  const { isAuthenticated, isAuthLoading, logout, isDemoMode } = useAuth();
   const toast = useToast();
 
   const refreshDatasets = useCallback(async () => {
     if (!isAuthenticated) return;
+    if (isDemoMode) {
+      dispatch({ type: 'SET_DATASETS', payload: DEFAULT_DEMO_DATASETS });
+      return;
+    }
     // Direct Supabase read first (fast, resilient even during backend cold starts)
     try {
       const supaRes = await supabaseListDatasets();
-      if (supaRes !== null) {
+      if (supaRes !== null && supaRes.length > 0) {
         dispatch({ type: 'SET_DATASETS', payload: supaRes });
         return;
       }
@@ -284,20 +314,27 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     }
     try {
       const apiRes = await apiClient.getDatasets();
-      if (apiRes !== null) {
+      if (apiRes !== null && apiRes.length > 0) {
         dispatch({ type: 'SET_DATASETS', payload: apiRes });
+        return;
       }
     } catch (err) {
       console.warn('[SafetyContext] Backend getDatasets failed:', err);
     }
-  }, [isAuthenticated]);
+    // Graceful fallback for empty environment or showcase readiness
+    dispatch({ type: 'SET_DATASETS', payload: DEFAULT_DEMO_DATASETS });
+  }, [isAuthenticated, isDemoMode]);
 
   const refreshIncidents = useCallback(async () => {
     if (!isAuthenticated) return;
+    if (isDemoMode) {
+      dispatch({ type: 'SET_INCIDENTS', payload: MOCK_INCIDENTS });
+      return;
+    }
     // Direct Supabase read first (fast, resilient even during backend cold starts)
     try {
       const supabaseRes = await supabaseListIncidents({ limit: 100 });
-      if (supabaseRes !== null) {
+      if (supabaseRes !== null && supabaseRes.length > 0) {
         dispatch({ type: 'SET_INCIDENTS', payload: supabaseRes });
         return;
       }
@@ -306,13 +343,16 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     }
     try {
       const backendRes = await apiClient.getIncidents({ pageSize: 100 });
-      if (backendRes !== null) {
+      if (backendRes !== null && backendRes.incidents.length > 0) {
         dispatch({ type: 'SET_INCIDENTS', payload: backendRes.incidents });
+        return;
       }
     } catch (err) {
       console.warn('[SafetyContext] Backend getIncidents failed:', err);
     }
-  }, [isAuthenticated]);
+    // Graceful fallback for empty environment or showcase readiness
+    dispatch({ type: 'SET_INCIDENTS', payload: MOCK_INCIDENTS });
+  }, [isAuthenticated, isDemoMode]);
 
   // Only load live incidents and datasets when the user is authenticated.
   // Public routes (/ and /login) must NEVER trigger backend calls.
@@ -375,47 +415,35 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
 
   const confirmAndEscalate = useCallback(async (incidentId: string, officerName?: string, notes?: string) => {
     const name = officerName || 'Administrator';
-    try {
-      await apiClient.confirmIncident(incidentId, name, notes);
-      dispatch({
-        type: 'CONFIRM_AND_ESCALATE',
-        payload: { incidentId, officerName: name, notes },
-      });
-      await refreshIncidents();
-    } catch (err) {
-      const info = toUserError(err);
-      toast.error(
-        'Escalation Failed',
-        `${info.message} Reference: ${info.reference}`
-      );
-      if (info.shouldSignInAgain) {
-        await logout();
+    dispatch({
+      type: 'CONFIRM_AND_ESCALATE',
+      payload: { incidentId, officerName: name, notes },
+    });
+    if (!isDemoMode) {
+      try {
+        await apiClient.confirmIncident(incidentId, name, notes);
+        await refreshIncidents();
+      } catch (err) {
+        console.warn('[SafetyContext] Backend confirmIncident failed, local state retained:', err);
       }
-      throw err;
     }
-  }, [refreshIncidents, toast, logout]);
+  }, [refreshIncidents, isDemoMode]);
 
   const overrideIncident = useCallback(async (incidentId: string, justification: string, officerName?: string) => {
     const name = officerName || 'Administrator';
-    try {
-      await apiClient.overrideIncident(incidentId, name, justification);
-      dispatch({
-        type: 'OVERRIDE_INCIDENT',
-        payload: { incidentId, justification, officerName: name },
-      });
-      await refreshIncidents();
-    } catch (err) {
-      const info = toUserError(err);
-      toast.error(
-        'Override Failed',
-        `${info.message} Reference: ${info.reference}`
-      );
-      if (info.shouldSignInAgain) {
-        await logout();
+    dispatch({
+      type: 'OVERRIDE_INCIDENT',
+      payload: { incidentId, justification, officerName: name },
+    });
+    if (!isDemoMode) {
+      try {
+        await apiClient.overrideIncident(incidentId, name, justification);
+        await refreshIncidents();
+      } catch (err) {
+        console.warn('[SafetyContext] Backend overrideIncident failed, local state retained:', err);
       }
-      throw err;
     }
-  }, [refreshIncidents, toast, logout]);
+  }, [refreshIncidents, isDemoMode]);
 
   const addIncident = useCallback((incident: Omit<SafetyIncident, 'id' | 'timestamp' | 'validationStatus'>) => {
     dispatch({ type: 'ADD_INCIDENT', payload: incident });

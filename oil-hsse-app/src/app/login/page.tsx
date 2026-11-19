@@ -30,6 +30,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   RefreshCw,
+  Shield,
+  Zap,
+  Sparkles,
 } from 'lucide-react';
 
 interface AuthErrorInfo {
@@ -180,8 +183,22 @@ function LoginCardContent() {
     signUpWithEmail,
     resendConfirmationEmail,
     setupIncomplete,
+    enterDemoMode,
   } = useAuth();
   const toast = useToast();
+
+  const handleEnterDemo = async (roleToUse: 'ADMIN' | 'USER') => {
+    setIsSubmitting(true);
+    await enterDemoMode(roleToUse);
+    setIsSubmitting(false);
+    toast.success(
+      `Showcase Demo Active (${roleToUse === 'ADMIN' ? 'Admin' : 'Safety Officer'})`,
+      roleToUse === 'ADMIN'
+        ? 'Signed in as Chief HSSE Superintendent with full review, escalation, and override privileges.'
+        : 'Signed in as Field HSSE Observer with standard surveillance privileges.'
+    );
+    router.replace(targetRedirect);
+  };
 
   const targetRedirect = getSafeRedirectUrl(searchParams?.get('next') ?? null);
 
@@ -976,6 +993,50 @@ function LoginCardContent() {
                 )}
               </div>
             </HoverBorderGradient>
+          </div>
+
+          {/* ── 7. Instant Showcase Demo Mode (Mentor & Showcase Access) ── */}
+          <div className="mt-6 pt-5 border-t border-white/10">
+            <div className="flex items-center justify-between mb-2.5">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="text-[11px] font-mono font-bold tracking-wider text-neutral-200 uppercase flex items-center gap-1">
+                  <Zap className="w-3 h-3 text-emerald-400" />
+                  Live Showcase Demo Access
+                </span>
+              </div>
+              <span className="text-[10px] font-mono text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                Zero Setup
+              </span>
+            </div>
+
+            <p className="text-[11px] text-neutral-400 leading-relaxed mb-3">
+              Instant evaluation access with preloaded Assam Basin field telemetry, SIF flags, and XAI explainability models.
+            </p>
+
+            <div className="grid grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => handleEnterDemo('ADMIN')}
+                disabled={isSubmitting}
+                className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-300 hover:bg-amber-500/25 hover:border-amber-500/50 transition-all text-xs font-semibold cursor-pointer shadow-sm hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50"
+                title="Enter as Chief HSSE Superintendent (Full Privileges: Overrides, Escalations, Dataset Management)"
+              >
+                <Shield className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                <span>Demo Admin</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleEnterDemo('USER')}
+                disabled={isSubmitting}
+                className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-blue-500/15 border border-blue-500/35 text-blue-300 hover:bg-blue-500/25 hover:border-blue-500/50 transition-all text-xs font-semibold cursor-pointer shadow-sm hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50"
+                title="Enter as Field HSSE Observer (Standard User: Incident Surveillance & Reporting)"
+              >
+                <User className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                <span>Demo Officer</span>
+              </button>
+            </div>
           </div>
         </form>
       </div>

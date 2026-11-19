@@ -40,6 +40,9 @@ interface AuthContextType {
   authStatus: AuthStatus;
   isAuthenticated: boolean;
   isAuthLoading: boolean;
+  isDemoMode: boolean;
+  enterDemoMode: (role?: UserRole) => Promise<void>;
+  switchDemoRole: (role: UserRole) => void;
   loginWithEmail: (email: string, password: string) => Promise<AuthResult>;
   signUpWithEmail: (email: string, password: string, fullName: string) => Promise<AuthResult>;
   resendConfirmationEmail: (email: string) => Promise<{ success: boolean; error?: string; code?: string }>;
@@ -79,6 +82,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<UserProfile | null>(null);
   const [authStatus, setAuthStatus] = useState<AuthStatus>('loading');
   const [setupIncomplete, setSetupIncomplete] = useState<boolean>(false);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
 
   // Helper to fetch user profile strictly from public.profiles
   const fetchProfile = useCallback(async (userId: string, userEmail: string): Promise<UserProfile | null> => {
@@ -134,6 +138,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let isMounted = true;
     purgeLegacyStorage();
+
+    // Check if Live Showcase Demo Mode session is active
+    if (typeof window !== 'undefined') {
+      try {
+        const storedDemo = sessionStorage.getItem('oil_hsse_demo_session_active');
+        if (storedDemo === 'ADMIN' || storedDemo === 'USER') {
+          const demoProfile: UserProfile = {
+            id: storedDemo === 'ADMIN' ? 'demo-admin-001' : 'demo-user-002',
+            name: storedDemo === 'ADMIN' ? 'Er. Ansh Raj (Chief HSSE Supt.)' : 'Field HSSE Observer',
+            email: storedDemo === 'ADMIN' ? 'admin.showcase@oilindia.in' : 'observer.showcase@oilindia.in',
+            role: storedDemo,
+            basin: 'Assam Operational Basin',
+            designation: storedDemo === 'ADMIN' ? 'Chief HSSE Superintendent' : 'HSSE Field Observer',
+          };
+          if (isMounted) {
+            setIsDemoMode(true);
+            setSession(demoProfile);
+            setAuthStatus('authenticated');
+            setSetupIncomplete(false);
+          }
+          return;
+        }
+      } catch {
+        // Ignore storage read errors
+      }
+    }
 
     async function initAuth() {
       const client = getSupabaseClient();
@@ -285,6 +315,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       setSession(profile);
+      setIsDemoMode(false);
+      if (typeof window !== 'undefined') {
+        try {
+          sessionStorage.removeItem('oil_hsse_demo_session_active');
+        } catch {}
+      }
       setAuthStatus('authenticated');
       purgeLegacyStorage();
       return { success: true };
@@ -441,8 +477,51 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const enterDemoMode = useCallback(async (selectedRole: UserRole = 'ADMIN') => {
+    const demoProfile: UserProfile = {
+      id: selectedRole === 'ADMIN' ? 'demo-admin-001' : 'demo-user-002',
+      name: selectedRole === 'ADMIN' ? 'Er. Ansh Raj (Chief HSSE Supt.)' : 'Field HSSE Observer',
+      email: selectedRole === 'ADMIN' ? 'admin.showcase@oilindia.in' : 'observer.showcase@oilindia.in',
+      role: selectedRole,
+      basin: 'Assam Operational Basin',
+      designation: selectedRole === 'ADMIN' ? 'Chief HSSE Superintendent' : 'HSSE Field Observer',
+    };
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem('oil_hsse_demo_session_active', selectedRole);
+      } catch {}
+    }
+    setIsDemoMode(true);
+    setSession(demoProfile);
+    setAuthStatus('authenticated');
+    setSetupIncomplete(false);
+  }, []);
+
+  const switchDemoRole = useCallback((newRole: UserRole) => {
+    const updatedProfile: UserProfile = {
+      id: newRole === 'ADMIN' ? 'demo-admin-001' : 'demo-user-002',
+      name: newRole === 'ADMIN' ? 'Er. Ansh Raj (Chief HSSE Supt.)' : 'Field HSSE Observer',
+      email: newRole === 'ADMIN' ? 'admin.showcase@oilindia.in' : 'observer.showcase@oilindia.in',
+      role: newRole,
+      basin: 'Assam Operational Basin',
+      designation: newRole === 'ADMIN' ? 'Chief HSSE Superintendent' : 'HSSE Field Observer',
+    };
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.setItem('oil_hsse_demo_session_active', newRole);
+      } catch {}
+    }
+    setSession(updatedProfile);
+  }, []);
+
   const logout = useCallback(async () => {
     setAuthStatus('loading');
+    if (typeof window !== 'undefined') {
+      try {
+        sessionStorage.removeItem('oil_hsse_demo_session_active');
+      } catch {}
+    }
+    setIsDemoMode(false);
     const client = getSupabaseClient();
     if (client) {
       try {
@@ -473,6 +552,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         authStatus,
         isAuthenticated,
         isAuthLoading,
+        isDemoMode,
+        enterDemoMode,
+        switchDemoRole,
         loginWithEmail,
         signUpWithEmail,
         resendConfirmationEmail,
