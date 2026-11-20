@@ -303,20 +303,20 @@ export default function IngestionModal() {
             incidents: csvResult.incidents,
             dataset: csvResult.dataset,
           });
-          if (!isDemoMode) {
-            try {
-              await refreshDatasets();
-              await refreshIncidents();
-            } catch (e) {
-              console.error('[IngestionModal] Refetch after commit failed:', e);
+            if (!isDemoMode) {
+              try {
+                await refreshDatasets();
+                await refreshIncidents();
+              } catch (e) {
+                console.error('[IngestionModal] Refetch after commit failed:', e);
+              }
             }
-          }
-          handleClose();
-          toast.success(
-            'Field CSV Ingested Successfully',
-            `Validated and committed ${csvResult.incidents.length} incident records from "${csvFileName}". Dataset ID: ${csvResult.dataset.id}`
-          );
-        }, 150);
+            handleClose();
+            toast.success(
+              'Field CSV Ingested Successfully',
+              `Validated and committed ${csvResult.incidents.length} incident records from "${csvFileName}". Dataset ID: ${csvResult.dataset.id}`
+            );
+          }, 150);
       }
     }, 70);
   };
@@ -346,11 +346,10 @@ export default function IngestionModal() {
               <button
                 type="button"
                 onClick={() => setActiveTab('csv')}
-                className={`px-3 py-1.5 rounded transition-all cursor-pointer flex items-center gap-1.5 ${
-                  activeTab === 'csv'
+                className={`px-3 py-1.5 rounded transition-all cursor-pointer flex items-center gap-1.5 ${activeTab === 'csv'
                     ? 'bg-[#0066CC] dark:bg-[#0071E3] text-white font-semibold shadow-xs'
                     : 'text-app-muted hover:text-app-primary'
-                }`}
+                  }`}
               >
                 <FileSpreadsheet className="w-3.5 h-3.5" />
                 <span>Upload CSV (Primary)</span>
@@ -361,11 +360,10 @@ export default function IngestionModal() {
                   setActiveTab('single');
                   resetCsvState();
                 }}
-                className={`px-2.5 py-1 rounded transition-colors cursor-pointer text-[11px] ${
-                  activeTab === 'single'
+                className={`px-2.5 py-1 rounded transition-colors cursor-pointer text-[11px] ${activeTab === 'single'
                     ? 'bg-app-surface text-app-primary font-semibold shadow-2xs'
                     : 'text-app-muted hover:text-app-primary'
-                }`}
+                  }`}
                 title="Log a single observation manually (Exception path)"
               >
                 Manual Entry
@@ -577,11 +575,10 @@ export default function IngestionModal() {
             <div className="flex items-center justify-between pb-3 border-b border-app-subtle text-xs font-mono">
               <div className="flex items-center gap-2">
                 <span
-                  className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                    csvStep === 'UPLOAD'
+                  className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${csvStep === 'UPLOAD'
                       ? 'bg-[#0066CC] dark:bg-[#0071E3] text-white shadow-xs'
                       : 'bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800'
-                  }`}
+                    }`}
                 >
                   {csvStep !== 'UPLOAD' ? '✓' : '1'}
                 </span>
@@ -594,13 +591,12 @@ export default function IngestionModal() {
 
               <div className="flex items-center gap-2">
                 <span
-                  className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                    csvStep === 'QUALITY_REPORT'
+                  className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${csvStep === 'QUALITY_REPORT'
                       ? 'bg-[#0066CC] dark:bg-[#0071E3] text-white shadow-xs'
                       : csvStep === 'PROCESSING'
-                      ? 'bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800'
-                      : 'bg-app-elevated text-app-muted border border-app-subtle'
-                  }`}
+                        ? 'bg-emerald-50 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800'
+                        : 'bg-app-elevated text-app-muted border border-app-subtle'
+                    }`}
                 >
                   {csvStep === 'PROCESSING' ? '✓' : '2'}
                 </span>
@@ -619,11 +615,10 @@ export default function IngestionModal() {
 
               <div className="flex items-center gap-2">
                 <span
-                  className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
-                    csvStep === 'PROCESSING'
+                  className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${csvStep === 'PROCESSING'
                       ? 'bg-[#0066CC] dark:bg-[#0071E3] text-white shadow-xs'
                       : 'bg-app-elevated text-app-muted border border-app-subtle'
-                  }`}
+                    }`}
                 >
                   3
                 </span>
@@ -946,23 +941,21 @@ export default function IngestionModal() {
                       >
                         <span
                           data-pipeline-dot
-                          className={`w-2.5 h-2.5 rounded-full flex-shrink-0 transition-colors duration-200 ${
-                            isDone
+                          className={`w-2.5 h-2.5 rounded-full flex-shrink-0 transition-colors duration-200 ${isDone
                               ? 'bg-emerald-500'
                               : isActive
-                              ? 'bg-[#0071E3] shadow-[0_0_8px_rgba(0,113,227,0.5)]'
-                              : 'bg-app-subtle'
-                          }`}
+                                ? 'bg-[#0071E3] shadow-[0_0_8px_rgba(0,113,227,0.5)]'
+                                : 'bg-app-subtle'
+                            }`}
                         />
                         <span
                           data-pipeline-label
-                          className={`text-xs font-mono leading-relaxed transition-colors duration-200 ${
-                            isDone
+                          className={`text-xs font-mono leading-relaxed transition-colors duration-200 ${isDone
                               ? 'text-emerald-600 dark:text-emerald-400/70'
                               : isActive
-                              ? 'text-[#0066CC] dark:text-[#2997FF] font-semibold'
-                              : 'text-app-muted'
-                          }`}
+                                ? 'text-[#0066CC] dark:text-[#2997FF] font-semibold'
+                                : 'text-app-muted'
+                            }`}
                         >
                           {stage.label}
                         </span>

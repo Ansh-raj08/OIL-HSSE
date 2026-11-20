@@ -266,11 +266,10 @@ export default function DatasetsPage() {
                             <tr
                               key={ds.id}
                               onClick={() => setSelectedDataset(ds)}
-                              className={`cursor-pointer transition-colors ${
-                                isSelected
+                              className={`cursor-pointer transition-colors ${isSelected
                                   ? 'bg-amber-500/10 dark:bg-amber-500/15 font-medium'
                                   : 'hover:bg-app-elevated/50'
-                              }`}
+                                }`}
                             >
                               <td className="py-3 px-4 font-mono font-medium text-app-primary">
                                 <div className="flex items-center gap-2">

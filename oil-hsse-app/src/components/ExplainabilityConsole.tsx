@@ -6,14 +6,14 @@
 // Full-featured decision workflow in a focused modal dialog
 // ============================================================
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useGsapModalReveal, useGsapRiskScoreReveal } from '@/hooks/useGsap';
 import { useSafety } from '@/context/SafetyContext';
 import { useAuth } from '@/context/AuthContext';
 import { useTimeFormat } from '@/context/TimeFormatContext';
 import { useToast } from '@/context/ToastContext';
-import { ControlLevel } from '@/types/safety';
+import { ControlLevel, LSRCode, LSR_DICTIONARY } from '@/types/safety';
 import { RiskBadge, StatusChip } from '@/components/ui/badge';
 import EscalationLikelihoodGauge from '@/components/EscalationLikelihoodGauge';
 import {
@@ -30,7 +30,94 @@ import {
   ChevronRight,
   ShieldCheck,
   X,
+  Mail,
+  Send,
+  Copy,
+  Check,
+  ExternalLink,
+  Edit3,
 } from 'lucide-react';
+
+export interface ConcernedHead {
+  name: string;
+  designation: string;
+  email: string;
+  jurisdiction: string;
+}
+
+export function getConcernedHeadForSite(siteName: string): ConcernedHead {
+  const lower = (siteName || '').toLowerCase();
+  if (lower.includes('duliajan') || lower.includes('rig #7') || lower.includes('drilling')) {
+    return {
+      name: 'Er. B. K. Gogoi',
+      designation: 'Chief General Manager (Drilling & Field Operations)',
+      email: 'cgm.drilling.duliajan@oilindia.in',
+      jurisdiction: 'Duliajan Operational Headquarters & Deep Drilling Assets',
+    };
+  }
+  if (lower.includes('moran') || lower.includes('ggs')) {
+    return {
+      name: 'Er. R. K. Saikia',
+      designation: 'General Manager (Moran Production & Gas Gathering)',
+      email: 'area.head.moran@oilindia.in',
+      jurisdiction: 'Moran Gas Gathering Stations & Upstream Well Manifolds',
+    };
+  }
+  if (lower.includes('naharkatiya') || lower.includes('workover') || lower.includes('well #114')) {
+    return {
+      name: 'Er. P. K. Hazarika',
+      designation: 'Deputy General Manager (Workover & Well Servicing)',
+      email: 'head.workover.nhk@oilindia.in',
+      jurisdiction: 'Naharkatiya Field Well Services & Rig Workover Units',
+    };
+  }
+  if (lower.includes('digboi') || lower.includes('ctf') || lower.includes('crude ctf')) {
+    return {
+      name: 'Er. A. K. Barman',
+      designation: 'General Manager (Surface Facilities & Storage Ops)',
+      email: 'head.surface.digboi@oilindia.in',
+      jurisdiction: 'Digboi Central Tank Farm & Terminal Dispatch',
+    };
+  }
+  if (lower.includes('kumchai')) {
+    return {
+      name: 'Er. M. K. Chaliha',
+      designation: 'General Manager (Exploration & Frontier Drilling)',
+      email: 'head.exploration.kumchai@oilindia.in',
+      jurisdiction: 'Kumchai Exploratory Drilling Blocks',
+    };
+  }
+  if (lower.includes('dikom')) {
+    return {
+      name: 'Er. N. K. Sharma',
+      designation: 'Installation Manager (Dikom CTF & Pumping Station)',
+      email: 'installation.mgr.dikom@oilindia.in',
+      jurisdiction: 'Dikom Central Tank Farm & Processing Enclave',
+    };
+  }
+  if (lower.includes('borbil')) {
+    return {
+      name: 'Er. D. J. Das',
+      designation: 'Rig Superintendent (Borbil Drilling Asset)',
+      email: 'rig.superintendent.borbil@oilindia.in',
+      jurisdiction: 'Borbil Wellsite Clusters',
+    };
+  }
+  if (lower.includes('shalmari')) {
+    return {
+      name: 'Er. S. R. Gogoi',
+      designation: 'Production Superintendent (Shalmari Asset)',
+      email: 'production.head.shalmari@oilindia.in',
+      jurisdiction: 'Shalmari Production Wells & Trunk Manifolds',
+    };
+  }
+  return {
+    name: 'Er. T. Baruah',
+    designation: 'Chief HSSE Superintendent & Area General Manager',
+    email: 'gm.hsse.assam@oilindia.in',
+    jurisdiction: 'Assam Operational Basin - Central HSSE Directorate',
+  };
+}
 
 interface ExplainabilityConsoleProps {
   isOpen?: boolean;
@@ -38,7 +125,13 @@ interface ExplainabilityConsoleProps {
 }
 
 export default function ExplainabilityConsole({ isOpen = true, onClose }: ExplainabilityConsoleProps) {
-  const { selectedIncident, confirmAndEscalate, overrideIncident } = useSafety();
+  const {
+    selectedIncident,
+    confirmAndEscalate,
+    overrideIncident,
+    updateIncidentLsr,
+    dispatchAdvisory,
+  } = useSafety();
   const { session, canEscalate, role } = useAuth();
   const { formatTimestamp } = useTimeFormat();
   const toast = useToast();
@@ -49,7 +142,17 @@ export default function ExplainabilityConsole({ isOpen = true, onClose }: Explai
   const [overrideOfficer, setOverrideOfficer] = useState(session?.name || 'Administrator');
   const [escalationNote, setEscalationNote] = useState('');
   const [showEscalationSuccess, setShowEscalationSuccess] = useState(false);
+  const [showAdvisorySuccess, setShowAdvisorySuccess] = useState(false);
   const [isNarrativeExpanded, setIsNarrativeExpanded] = useState(false);
+
+  // New Features: IOGP Rule selector & Area Head Email composer
+  const [isLsrSelectorOpen, setIsLsrSelectorOpen] = useState(false);
+  const [isEmailModalOpen, setIsEmailModalOpen] = useState(false);
+  const [emailTo, setEmailTo] = useState('');
+  const [emailCc, setEmailCc] = useState('hsse.directorate@oilindia.in, field.safety.oil@oilindia.in');
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailBody, setEmailBody] = useState('');
+  const [isCopied, setIsCopied] = useState(false);
 
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
@@ -72,6 +175,50 @@ export default function ExplainabilityConsole({ isOpen = true, onClose }: Explai
     }
   }, [session?.name]);
 
+  // Sync email composer fields whenever selected incident changes
+  const concernedHead = useMemo(() => {
+    return getConcernedHeadForSite(selectedIncident?.site || '');
+  }, [selectedIncident?.site]);
+
+  useEffect(() => {
+    if (selectedIncident) {
+      const head = getConcernedHeadForSite(selectedIncident.site);
+      setEmailTo(head.email);
+      setEmailCc('hsse.directorate@oilindia.in, field.safety.oil@oilindia.in');
+      setEmailSubject(
+        `[URGENT HSSE ADVISORY] SIF Precursor Alert - ${selectedIncident.id} (${selectedIncident.site}) - Risk Score: ${selectedIncident.riskScore}/100`
+      );
+
+      const topAction =
+        selectedIncident.hierarchyActions?.[0]?.action ||
+        'Immediate stop-work verification and critical physical barrier inspection.';
+
+      const bodyText = `ATTENTION: ${head.name} (${head.designation})
+JURISDICTION: ${head.jurisdiction}
+LOCATION: ${selectedIncident.site} (${selectedIncident.basin})
+INCIDENT ID: ${selectedIncident.id}
+TIMESTAMP: ${selectedIncident.timestamp}
+REPORTED BY: ${selectedIncident.reportedBy}
+
+=== HSSE SIF-PRECURSOR NOTIFICATION & ACTION DIRECTIVE ===
+SIF PRECURSOR FLAG: ${selectedIncident.isSifPrecursor ? 'YES (HIGH-ENERGY PRECURSOR)' : 'NO'}
+DETERMINISTIC SIF SCORE: ${selectedIncident.riskScore}/100 (${selectedIncident.riskLevel})
+IOGP LIFE-SAVING RULE: ${selectedIncident.lsrTitle}
+RECOMMENDED PRIMARY CONTROL: ${topAction}
+
+VERBATIM FIELD INCIDENT NARRATIVE:
+"${selectedIncident.rawNarrative}"
+
+OPERATIONAL DIRECTIVE:
+Immediate operational review is requested for ${selectedIncident.site}. Please verify critical barrier integrity, confirm isolation/protective measures, and ensure statutory DGMS/OISD compliance before continuing operations.
+
+Dispatched by: ${session?.name || 'Chief HSSE Superintendent'}
+OIL India Limited — Enterprise HSSE Decision-Support Platform`;
+
+      setEmailBody(bodyText);
+    }
+  }, [selectedIncident, session?.name]);
+
   // Focus trap & focus return
   useEffect(() => {
     if (isOpen && selectedIncident) {
@@ -82,12 +229,16 @@ export default function ExplainabilityConsole({ isOpen = true, onClose }: Explai
     }
   }, [isOpen, selectedIncident]);
 
-  // Handle escape key to close modal
+  // Handle escape key to close modal or sub-modals
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (isOverrideFormOpen) {
+        if (isEmailModalOpen) {
+          setIsEmailModalOpen(false);
+        } else if (isLsrSelectorOpen) {
+          setIsLsrSelectorOpen(false);
+        } else if (isOverrideFormOpen) {
           setIsOverrideFormOpen(false);
         } else if (onClose) {
           onClose();
@@ -96,7 +247,7 @@ export default function ExplainabilityConsole({ isOpen = true, onClose }: Explai
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, isOverrideFormOpen, onClose]);
+  }, [isOpen, isEmailModalOpen, isLsrSelectorOpen, isOverrideFormOpen, onClose]);
 
   // Prevent background scrolling while modal is open without layout shift
   useEffect(() => {
@@ -177,6 +328,56 @@ export default function ExplainabilityConsole({ isOpen = true, onClose }: Explai
     }
   };
 
+  const handleLsrSelect = (ruleCode: LSRCode, fullTitle: string) => {
+    if (!selectedIncident) return;
+    updateIncidentLsr(selectedIncident.id, ruleCode, fullTitle);
+    toast.success(
+      'IOGP Rule Reclassified',
+      `Incident ${selectedIncident.id} updated to "${fullTitle}".`
+    );
+    setIsLsrSelectorOpen(false);
+  };
+
+  const handleLaunchEmailClient = () => {
+    if (!emailTo) return;
+    const mailtoUrl = `mailto:${encodeURIComponent(emailTo)}?cc=${encodeURIComponent(
+      emailCc
+    )}&subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody)}`;
+    window.location.href = mailtoUrl;
+    toast.info(
+      'Email Client Launched',
+      `Opening default mail client with advisory drafted for ${emailTo}.`
+    );
+  };
+
+  const handleCopyEmailBody = async () => {
+    try {
+      await navigator.clipboard.writeText(emailBody);
+      setIsCopied(true);
+      toast.success('Advisory Copied', 'Advisory dispatch brief copied to clipboard.');
+      setTimeout(() => setIsCopied(false), 3000);
+    } catch {
+      toast.error('Copy Failed', 'Failed to copy to clipboard.');
+    }
+  };
+
+  const handleSendDirectDispatch = () => {
+    if (!selectedIncident) return;
+    dispatchAdvisory(
+      selectedIncident.id,
+      emailTo,
+      session?.name || 'Administrator',
+      emailSubject
+    );
+    setShowAdvisorySuccess(true);
+    toast.success(
+      'Advisory Dispatched',
+      `Formal emergency advisory logged and dispatched to ${emailTo}.`
+    );
+    setIsEmailModalOpen(false);
+    setTimeout(() => setShowAdvisorySuccess(false), 5000);
+  };
+
   const getControlBadgeStyle = (level: ControlLevel) => {
     switch (level) {
       case 'ELIMINATION':
@@ -239,16 +440,29 @@ export default function ExplainabilityConsole({ isOpen = true, onClose }: Explai
             </div>
           </div>
 
-          {/* Close Button */}
-          {onClose && (
+          {/* Header Action Buttons */}
+          <div className="flex items-center gap-2 flex-shrink-0">
             <button
-              onClick={onClose}
-              className="min-w-[44px] min-h-[44px] flex items-center justify-center p-2 rounded-lg text-app-muted hover:text-app-primary hover:bg-app-elevated transition-colors cursor-pointer"
-              aria-label="Close modal"
+              type="button"
+              onClick={() => setIsEmailModalOpen(true)}
+              className="min-h-[38px] flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-blue-700 dark:text-[#2997FF] bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 border border-blue-200 dark:border-blue-800/80 transition-all cursor-pointer font-sans"
+              title="Email concerned area head for this incident"
             >
-              <X className="w-5 h-5" />
+              <Mail className="w-3.5 h-3.5 flex-shrink-0" />
+              <span className="hidden sm:inline">Email Area Head</span>
+              <span className="sm:hidden">Email</span>
             </button>
-          )}
+
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="min-w-[38px] min-h-[38px] flex items-center justify-center p-2 rounded-lg text-app-muted hover:text-app-primary hover:bg-app-elevated transition-colors cursor-pointer"
+                aria-label="Close modal"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
+          </div>
         </div>
 
         {/* ── Scrollable Body: Lead with SIF Risk, Evidence & Controls ─ */}
@@ -259,6 +473,22 @@ export default function ExplainabilityConsole({ isOpen = true, onClose }: Explai
               <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
               <span>
                 STOP-WORK ADVISORY DISPATCHED: SIF precursor escalation logged and transmitted to field safety dispatch.
+              </span>
+            </div>
+          )}
+
+          {/* Advisory Sent Notification Banner */}
+          {(showAdvisorySuccess || selectedIncident.dispatchedAdvisory) && (
+            <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-950/70 border border-blue-300 dark:border-blue-700/60 flex items-center justify-between text-xs font-sans text-blue-900 dark:text-blue-200 animate-fade-in-scale">
+              <div className="flex items-center gap-2">
+                <Mail className="w-4 h-4 text-blue-600 dark:text-[#2997FF] flex-shrink-0" />
+                <span>
+                  ADVISORY DISPATCHED: Official notice transmitted to{' '}
+                  <strong>{selectedIncident.dispatchedAdvisory?.recipient || emailTo}</strong>.
+                </span>
+              </div>
+              <span className="font-mono text-[11px] text-blue-700 dark:text-blue-300">
+                {selectedIncident.dispatchedAdvisory?.sentAt || 'Just now'}
               </span>
             </div>
           )}
@@ -318,12 +548,64 @@ export default function ExplainabilityConsole({ isOpen = true, onClose }: Explai
               )}
             </div>
 
-            {/* Life-Saving Rule Violation Summary */}
-            <div className="pt-3 border-t border-app-subtle space-y-1.5">
-              <div className="flex items-center justify-between text-xs">
-                <span className="text-app-muted font-sans">IOGP Life-Saving Rule:</span>
-                <span className="font-sans font-semibold text-amber-700 dark:text-[#D4AF37]">{lsrTitle}</span>
+            {/* Life-Saving Rule Violation Summary with Reclassify Toggle */}
+            <div className="pt-3 border-t border-app-subtle space-y-2">
+              <div className="flex items-center justify-between text-xs flex-wrap gap-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-app-muted font-sans">IOGP Life-Saving Rule:</span>
+                  <span className="font-sans font-semibold text-amber-700 dark:text-[#D4AF37]">{lsrTitle}</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsLsrSelectorOpen(!isLsrSelectorOpen)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-sans font-semibold text-[#0066CC] dark:text-[#2997FF] bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/50 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-colors cursor-pointer"
+                  title="Change or correct misprinted IOGP Life-Saving Rule"
+                >
+                  <Edit3 className="w-3 h-3" />
+                  <span>{isLsrSelectorOpen ? 'Close Rule Selector' : 'Change Rule / Fix Misprint'}</span>
+                </button>
               </div>
+
+              {/* Interactive IOGP Rule Selector Grid */}
+              {isLsrSelectorOpen && (
+                <div className="p-3 rounded-xl bg-app-elevated border border-app-subtle space-y-2.5 animate-fade-in text-xs font-sans shadow-xs">
+                  <div className="flex items-center justify-between pb-1.5 border-b border-app-subtle">
+                    <span className="font-semibold text-app-primary flex items-center gap-1.5">
+                      <ShieldCheck className="w-3.5 h-3.5 text-amber-600 dark:text-[#D4AF37]" />
+                      Reclassify IOGP Life-Saving Rule (9 Standard Rules)
+                    </span>
+                    <span className="text-[10px] font-mono text-amber-700 dark:text-amber-400">
+                      Misprint Correction Mode
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-1.5">
+                    {Object.values(LSR_DICTIONARY).map((rule) => {
+                      const isSelected = selectedIncident.lsrCategory === rule.code;
+                      return (
+                        <button
+                          key={rule.code}
+                          type="button"
+                          onClick={() => handleLsrSelect(rule.code, `${rule.code}: ${rule.title}`)}
+                          className={`p-2 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between gap-1 ${
+                            isSelected
+                              ? 'bg-amber-500/15 border-amber-500/40 text-amber-900 dark:text-amber-200 font-semibold shadow-xs'
+                              : 'bg-app-surface border-app-subtle hover:bg-app-elevated hover:border-[#0066CC]/40 text-app-primary'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-[11px] font-bold">{rule.code}</span>
+                            {isSelected && <Check className="w-3.5 h-3.5 text-amber-600 dark:text-[#D4AF37]" />}
+                          </div>
+                          <span className="text-[11px] leading-tight line-clamp-1">{rule.title}</span>
+                          <span className="text-[10px] text-app-muted font-normal">{rule.category}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {lsrViolations && lsrViolations.length > 0 && (
                 <div className="space-y-1 pt-1">
@@ -521,28 +803,195 @@ export default function ExplainabilityConsole({ isOpen = true, onClose }: Explai
           )}
         </div>
 
-        {/* ── Modal Footer: Human-in-the-Loop Actions (ADMIN ONLY) ──────── */}
-        {/* If USER: Section is completely omitted per prompt specification */}
-        {canEscalate && (
-          <div className="flex-shrink-0 p-4 sm:p-5 border-t border-app-subtle bg-app-elevated/80 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <button
-              onClick={handleConfirm}
-              className="w-full sm:flex-1 min-h-[44px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-sans font-semibold text-xs text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition-all shadow-sm cursor-pointer"
-            >
-              <CheckCircle className="w-4 h-4" />
-              <span>CONFIRM & ESCALATE</span>
-            </button>
+        {/* ── Modal Footer: Human-in-the-Loop Actions & Email Dispatch ──────── */}
+        <div className="flex-shrink-0 p-4 sm:p-5 border-t border-app-subtle bg-app-elevated/80 flex flex-col sm:flex-row items-center justify-between gap-3">
+          {canEscalate ? (
+            <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:flex-1">
+              <button
+                onClick={handleConfirm}
+                className="w-full sm:flex-1 min-h-[44px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-sans font-semibold text-xs text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition-all shadow-sm cursor-pointer"
+              >
+                <CheckCircle className="w-4 h-4" />
+                <span>CONFIRM & ESCALATE</span>
+              </button>
 
-            <button
-              onClick={() => setIsOverrideFormOpen(true)}
-              className="w-full sm:w-auto min-h-[44px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-sans font-semibold text-xs text-app-secondary border border-app-strong hover:border-[#0066CC] hover:text-[#0066CC] dark:hover:border-[#2997FF] dark:hover:text-[#2997FF] bg-app-surface active:scale-95 transition-all cursor-pointer"
-            >
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-              <span>DOWNGRADE / OVERRIDE</span>
-            </button>
-          </div>
-        )}
+              <button
+                onClick={() => setIsOverrideFormOpen(true)}
+                className="w-full sm:w-auto min-h-[44px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-sans font-semibold text-xs text-app-secondary border border-app-strong hover:border-[#0066CC] hover:text-[#0066CC] dark:hover:border-[#2997FF] dark:hover:text-[#2997FF] bg-app-surface active:scale-95 transition-all cursor-pointer"
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span>DOWNGRADE / OVERRIDE</span>
+              </button>
+            </div>
+          ) : (
+            <div className="text-xs text-app-muted font-sans">
+              Supervisory Review & SIF Actions: Read-Only ({role})
+            </div>
+          )}
+
+          {/* Email Area Head Action Button */}
+          <button
+            type="button"
+            onClick={() => setIsEmailModalOpen(true)}
+            className="w-full sm:w-auto min-h-[44px] flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg font-sans font-semibold text-xs text-blue-700 dark:text-[#2997FF] border border-blue-300 dark:border-blue-800/80 hover:bg-blue-50 dark:hover:bg-blue-950/40 bg-app-surface active:scale-95 transition-all cursor-pointer"
+          >
+            <Mail className="w-4 h-4" />
+            <span>EMAIL CONCERNED HEAD</span>
+          </button>
+        </div>
       </div>
+
+      {/* ── Emergency HSSE Advisory Dispatch Composer Modal ───────── */}
+      {isEmailModalOpen && (
+        <div className="fixed inset-0 z-[110] bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-fade-in">
+          <div className="w-full max-w-2xl bg-app-surface border border-app-subtle rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[92dvh]">
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-app-subtle bg-app-elevated flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 rounded-lg bg-blue-500/10 text-blue-600 dark:text-[#2997FF] border border-blue-500/20">
+                  <Mail className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-sans font-bold text-sm sm:text-base text-app-primary">
+                    Dispatch HSSE Advisory to Concerned Area Head
+                  </h3>
+                  <p className="font-sans text-xs text-app-muted">
+                    Official SIF Precursor Notification per OIL & DGMS Protocols
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsEmailModalOpen(false)}
+                className="p-1.5 rounded-lg text-app-muted hover:text-app-primary hover:bg-app-elevated transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Form Fields */}
+            <div className="p-4 sm:p-6 space-y-4 text-xs font-sans overflow-y-auto flex-1 custom-scrollbar">
+              {/* Concerned Head Target Info Card */}
+              <div className="p-3 rounded-xl bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200/80 dark:border-blue-800/40 space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-blue-900 dark:text-blue-200 flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-amber-600 dark:text-[#D4AF37]" />
+                    {concernedHead.jurisdiction}
+                  </span>
+                  <span className="font-mono text-[11px] text-blue-700 dark:text-blue-300 font-semibold">
+                    Designated Area Authority
+                  </span>
+                </div>
+                <p className="text-xs text-app-secondary">
+                  <strong>{concernedHead.name}</strong> — {concernedHead.designation}
+                </p>
+              </div>
+
+              {/* Inputs */}
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-app-primary mb-1">
+                    To (Concerned Head Official Email):
+                  </label>
+                  <input
+                    type="email"
+                    value={emailTo}
+                    onChange={(e) => setEmailTo(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-app-elevated border border-app-subtle text-xs text-app-primary font-mono focus:outline-none focus:border-[#0066CC]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-app-primary mb-1">
+                    CC (HSSE Directorate & Safety Cell):
+                  </label>
+                  <input
+                    type="text"
+                    value={emailCc}
+                    onChange={(e) => setEmailCc(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-app-elevated border border-app-subtle text-xs text-app-primary font-mono focus:outline-none focus:border-[#0066CC]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-app-primary mb-1">
+                    Subject:
+                  </label>
+                  <input
+                    type="text"
+                    value={emailSubject}
+                    onChange={(e) => setEmailSubject(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg bg-app-elevated border border-app-subtle text-xs text-app-primary font-sans font-medium focus:outline-none focus:border-[#0066CC]"
+                  />
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-app-primary">
+                      Advisory Message Body:
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleCopyEmailBody}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#0066CC] dark:text-[#2997FF] hover:underline cursor-pointer"
+                    >
+                      {isCopied ? <Check className="w-3 h-3 text-emerald-500" /> : <Copy className="w-3 h-3" />}
+                      <span>{isCopied ? 'Copied to Clipboard!' : 'Copy Body'}</span>
+                    </button>
+                  </div>
+                  <textarea
+                    rows={8}
+                    value={emailBody}
+                    onChange={(e) => setEmailBody(e.target.value)}
+                    className="w-full p-3 rounded-lg bg-app-elevated border border-app-subtle text-xs text-app-primary font-mono leading-relaxed focus:outline-none focus:border-[#0066CC]"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Footer Actions */}
+            <div className="p-4 sm:p-5 border-t border-app-subtle bg-app-elevated flex flex-col sm:flex-row items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => setIsEmailModalOpen(false)}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-lg text-xs font-semibold text-app-muted hover:text-app-primary cursor-pointer border border-app-subtle hover:bg-app-surface transition-colors"
+              >
+                Cancel
+              </button>
+
+              <div className="flex flex-wrap items-center gap-2.5 w-full sm:w-auto">
+                <button
+                  type="button"
+                  onClick={handleCopyEmailBody}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-lg text-xs font-semibold text-app-primary bg-app-surface border border-app-subtle hover:bg-app-elevated transition-colors cursor-pointer"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy Brief</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleLaunchEmailClient}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-lg text-xs font-semibold text-blue-700 dark:text-[#2997FF] bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 hover:bg-blue-100 dark:hover:bg-blue-900/60 transition-colors cursor-pointer"
+                  title="Launch Outlook or default mail client with prefilled email"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open in Mail Client</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSendDirectDispatch}
+                  className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:scale-95 transition-all shadow-sm cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>Log & Dispatch</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>,
     document.body
   );

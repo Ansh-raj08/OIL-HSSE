@@ -12,6 +12,8 @@ import {
   TriageFilter,
   KpiMetrics,
   SafetyContextType,
+  LSRCode,
+  LSRViolation,
 } from '@/types/safety';
 import { apiClient, toUserError } from '@/lib/api/client';
 import { useAuth } from '@/context/AuthContext';
@@ -22,30 +24,56 @@ import {
 } from '@/lib/supabase/db';
 import { MOCK_INCIDENTS } from '@/data/mockIncidents';
 
-export const DEFAULT_DEMO_DATASETS: Dataset[] = [
-  {
-    id: 'd0000000-0000-0000-0000-000000000001',
-    filename: 'OIL_Assam_Drilling_Q1_2026.csv',
-    uploadedAt: '14 Jan 2026, 06:45 IST',
-    uploadedBy: 'T. Baruah (Chief HSSE Supt.)',
-    status: 'READY',
-    totalRows: 12,
-    validRows: 12,
-    invalidRows: 0,
-    warningRows: 0,
-  },
-  {
-    id: 'd0000000-0000-0000-0000-000000000002',
-    filename: 'OIL_Assam_Field_Logs_Sample.csv',
-    uploadedAt: '13 Jan 2026, 22:30 IST',
-    uploadedBy: 'P. Phukan (Lead Toolpusher)',
-    status: 'READY',
-    totalRows: 10,
-    validRows: 10,
-    invalidRows: 0,
-    warningRows: 0,
-  },
-];
+export const DEFAULT_DEMO_DATASETS: Dataset[] = [];
+
+const DEMO_STORAGE_DATASETS_KEY = 'oil_hsse_demo_datasets';
+const DEMO_STORAGE_INCIDENTS_KEY = 'oil_hsse_demo_incidents';
+
+function getDemoDatasetsFromStorage(): Dataset[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = sessionStorage.getItem(DEMO_STORAGE_DATASETS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.warn('[SafetyContext] Failed to read demo datasets from sessionStorage:', e);
+  }
+  return [];
+}
+
+function saveDemoDatasetsToStorage(datasets: Dataset[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(DEMO_STORAGE_DATASETS_KEY, JSON.stringify(datasets));
+  } catch (e) {
+    console.warn('[SafetyContext] Failed to write demo datasets to sessionStorage:', e);
+  }
+}
+
+function getDemoIncidentsFromStorage(): SafetyIncident[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = sessionStorage.getItem(DEMO_STORAGE_INCIDENTS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (e) {
+    console.warn('[SafetyContext] Failed to read demo incidents from sessionStorage:', e);
+  }
+  return [];
+}
+
+function saveDemoIncidentsToStorage(incidents: SafetyIncident[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.setItem(DEMO_STORAGE_INCIDENTS_KEY, JSON.stringify(incidents));
+  } catch (e) {
+    console.warn('[SafetyContext] Failed to write demo incidents to sessionStorage:', e);
+  }
+}
 
 type SafetyAction =
   | { type: 'SET_INCIDENTS'; payload: SafetyIncident[] }
@@ -56,22 +84,40 @@ type SafetyAction =
   | { type: 'SET_SEARCH'; payload: string }
   | { type: 'SELECT_INCIDENT'; payload: SafetyIncident | null }
   | {
-      type: 'CONFIRM_AND_ESCALATE';
-      payload: { incidentId: string; officerName?: string; notes?: string };
-    }
+    type: 'CONFIRM_AND_ESCALATE';
+    payload: { incidentId: string; officerName?: string; notes?: string };
+  }
   | {
-      type: 'OVERRIDE_INCIDENT';
-      payload: { incidentId: string; justification: string; officerName?: string };
-    }
+    type: 'OVERRIDE_INCIDENT';
+    payload: { incidentId: string; justification: string; officerName?: string };
+  }
   | {
-      type: 'ADD_INCIDENT';
-      payload: Omit<SafetyIncident, 'id' | 'timestamp' | 'validationStatus'>;
-    }
+    type: 'UPDATE_INCIDENT_LSR';
+    payload: {
+      incidentId: string;
+      lsrCategory: LSRCode;
+      lsrTitle: string;
+      lsrViolations?: LSRViolation[];
+    };
+  }
+  | {
+    type: 'DISPATCH_ADVISORY';
+    payload: {
+      incidentId: string;
+      recipient: string;
+      officer: string;
+      subject?: string;
+    };
+  }
+  | {
+    type: 'ADD_INCIDENT';
+    payload: Omit<SafetyIncident, 'id' | 'timestamp' | 'validationStatus'>;
+  }
   | { type: 'ADD_BATCH_INCIDENTS'; payload: SafetyIncident[] }
   | {
-      type: 'COMMIT_DATASET_INGESTION';
-      payload: { incidents: SafetyIncident[]; dataset?: Dataset };
-    }
+    type: 'COMMIT_DATASET_INGESTION';
+    payload: { incidents: SafetyIncident[]; dataset?: Dataset };
+  }
   | { type: 'REMOVE_DATASET_INCIDENTS'; payload: { datasetId: string } }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'OPEN_INGESTION_MODAL' }
@@ -205,6 +251,72 @@ function safetyReducer(state: State, action: SafetyAction): State {
       };
     }
 
+    case 'UPDATE_INCIDENT_LSR': {
+      const { incidentId, lsrCategory, lsrTitle, lsrViolations } = action.payload;
+      const updatedIncidents = state.incidents.map((incident) => {
+        if (incident.id === incidentId) {
+          return {
+            ...incident,
+            lsrCategory,
+            lsrTitle,
+            lsrViolations: lsrViolations || [
+              {
+                code: lsrCategory,
+                label: lsrTitle.replace(/^LSR-\d+:\s*/, ''),
+                description: `Supervisory reclassification to ${lsrTitle}.`,
+              },
+            ],
+          };
+        }
+        return incident;
+      });
+
+      const updatedSelected =
+        state.selectedIncident?.id === incidentId
+          ? updatedIncidents.find((i) => i.id === incidentId) || null
+          : state.selectedIncident;
+
+      return {
+        ...state,
+        incidents: updatedIncidents,
+        selectedIncident: updatedSelected,
+      };
+    }
+
+    case 'DISPATCH_ADVISORY': {
+      const { incidentId, recipient, officer, subject } = action.payload;
+      const now = new Date().toLocaleString('en-IN', {
+        timeZone: 'Asia/Kolkata',
+        hour12: false,
+      }) + ' IST';
+
+      const updatedIncidents = state.incidents.map((incident) => {
+        if (incident.id === incidentId) {
+          return {
+            ...incident,
+            dispatchedAdvisory: {
+              sentAt: now,
+              recipient,
+              officer,
+              subject,
+            },
+          };
+        }
+        return incident;
+      });
+
+      const updatedSelected =
+        state.selectedIncident?.id === incidentId
+          ? updatedIncidents.find((i) => i.id === incidentId) || null
+          : state.selectedIncident;
+
+      return {
+        ...state,
+        incidents: updatedIncidents,
+        selectedIncident: updatedSelected,
+      };
+    }
+
     case 'ADD_INCIDENT': {
       const newId = `OIL-2026-${1043 + state.incidents.length}`;
       const now = new Date().toLocaleString('en-IN', {
@@ -305,23 +417,23 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     // Main App: Direct Supabase read first (fast, resilient even during backend cold starts)
     try {
       const supaRes = await supabaseListDatasets();
-      if (supaRes !== null) {
-        dispatch({ type: 'SET_DATASETS', payload: supaRes });
-        return;
+        if (supaRes !== null) {
+          dispatch({ type: 'SET_DATASETS', payload: supaRes });
+          return;
+        }
+      } catch (err) {
+        console.warn('[SafetyContext] Supabase list datasets failed:', err);
       }
-    } catch (err) {
-      console.warn('[SafetyContext] Supabase list datasets failed:', err);
-    }
-    try {
-      const apiRes = await apiClient.getDatasets();
-      if (apiRes !== null) {
-        dispatch({ type: 'SET_DATASETS', payload: apiRes });
-        return;
-      }
-    } catch (err) {
-      console.warn('[SafetyContext] Backend getDatasets failed:', err);
-    }
-  }, [isAuthenticated, isDemoMode]);
+      try {
+        const apiRes = await apiClient.getDatasets();
+          if (apiRes !== null) {
+            dispatch({ type: 'SET_DATASETS', payload: apiRes });
+            return;
+          }
+        } catch (err) {
+          console.warn('[SafetyContext] Backend getDatasets failed:', err);
+        }
+      }, [isAuthenticated, isDemoMode]);
 
   const refreshIncidents = useCallback(async () => {
     if (!isAuthenticated) return;
@@ -332,23 +444,23 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     // Main App: Direct Supabase read first (fast, resilient even during backend cold starts)
     try {
       const supabaseRes = await supabaseListIncidents({ limit: 100 });
-      if (supabaseRes !== null) {
-        dispatch({ type: 'SET_INCIDENTS', payload: supabaseRes });
-        return;
+        if (supabaseRes !== null) {
+          dispatch({ type: 'SET_INCIDENTS', payload: supabaseRes });
+          return;
+        }
+      } catch (err) {
+        console.warn('[SafetyContext] Supabase list incidents failed:', err);
       }
-    } catch (err) {
-      console.warn('[SafetyContext] Supabase list incidents failed:', err);
-    }
-    try {
-      const backendRes = await apiClient.getIncidents({ pageSize: 100 });
-      if (backendRes !== null) {
-        dispatch({ type: 'SET_INCIDENTS', payload: backendRes.incidents });
-        return;
-      }
-    } catch (err) {
-      console.warn('[SafetyContext] Backend getIncidents failed:', err);
-    }
-  }, [isAuthenticated, isDemoMode]);
+      try {
+        const backendRes = await apiClient.getIncidents({ pageSize: 100 });
+          if (backendRes !== null) {
+            dispatch({ type: 'SET_INCIDENTS', payload: backendRes.incidents });
+            return;
+          }
+        } catch (err) {
+          console.warn('[SafetyContext] Backend getIncidents failed:', err);
+        }
+      }, [isAuthenticated, isDemoMode]);
 
   // Only load live incidents and datasets when the user is authenticated.
   // Public routes (/ and /login) must NEVER trigger backend calls.
@@ -368,8 +480,13 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     async function loadData() {
       try {
         if (isDemoMode) {
-          dispatch({ type: 'SET_DATASETS', payload: DEFAULT_DEMO_DATASETS });
-          dispatch({ type: 'SET_INCIDENTS', payload: MOCK_INCIDENTS });
+          const storedDatasets = getDemoDatasetsFromStorage();
+          const storedIncidents = getDemoIncidentsFromStorage();
+          dispatch({ type: 'SET_DATASETS', payload: storedDatasets });
+          dispatch({
+            type: 'SET_INCIDENTS',
+            payload: [...storedIncidents, ...MOCK_INCIDENTS],
+          });
         } else {
           await Promise.all([refreshIncidents(), refreshDatasets()]);
         }
@@ -383,154 +500,266 @@ export function SafetyProvider({ children }: { children: ReactNode }) {
     return () => {
       isMounted = false;
     };
-  }, [isAuthenticated, isAuthLoading, isDemoMode, refreshIncidents, refreshDatasets]);
+}, [isAuthenticated, isAuthLoading, isDemoMode, refreshIncidents, refreshDatasets]);
 
 
-  // Real-time KPI calculations
-  const kpiMetrics: KpiMetrics = useMemo(() => {
-    const totalIngested = state.incidents.length;
-    const flaggedSif = state.incidents.filter(
-      (i) => i.isSifPrecursor && i.validationStatus !== 'OVERRIDDEN'
-    ).length;
-    const pendingReview = state.incidents.filter(
-      (i) => i.validationStatus === 'PENDING'
-    ).length;
-    const reviewedCount = totalIngested - pendingReview;
-    const complianceRate = totalIngested > 0 ? Math.round((reviewedCount / totalIngested) * 100) : 100;
+// Real-time KPI calculations
+const kpiMetrics: KpiMetrics = useMemo(() => {
+  const totalIngested = state.incidents.length;
+  const flaggedSif = state.incidents.filter(
+    (i) => i.isSifPrecursor && i.validationStatus !== 'OVERRIDDEN'
+  ).length;
+  const pendingReview = state.incidents.filter(
+    (i) => i.validationStatus === 'PENDING'
+  ).length;
+  const reviewedCount = totalIngested - pendingReview;
+  const complianceRate = totalIngested > 0 ? Math.round((reviewedCount / totalIngested) * 100) : 100;
 
-    return {
-      totalIngested,
-      flaggedSif,
-      pendingReview,
-      complianceRate,
-    };
-  }, [state.incidents]);
+  return {
+    totalIngested,
+    flaggedSif,
+    pendingReview,
+    complianceRate,
+  };
+}, [state.incidents]);
 
-  const setFilter = useCallback((filter: TriageFilter) => dispatch({ type: 'SET_FILTER', payload: filter }), []);
-  const setSearchQuery = useCallback((query: string) => dispatch({ type: 'SET_SEARCH', payload: query }), []);
-  const selectIncident = useCallback((incident: SafetyIncident | null) => dispatch({ type: 'SELECT_INCIDENT', payload: incident }), []);
-  const openIngestionModal = useCallback(() => dispatch({ type: 'OPEN_INGESTION_MODAL' }), []);
-  const closeIngestionModal = useCallback(() => dispatch({ type: 'CLOSE_INGESTION_MODAL' }), []);
-  const openOverrideModal = useCallback(() => dispatch({ type: 'OPEN_OVERRIDE_MODAL' }), []);
-  const closeOverrideModal = useCallback(() => dispatch({ type: 'CLOSE_OVERRIDE_MODAL' }), []);
+const setFilter = useCallback((filter: TriageFilter) => dispatch({ type: 'SET_FILTER', payload: filter }), []);
+const setSearchQuery = useCallback((query: string) => dispatch({ type: 'SET_SEARCH', payload: query }), []);
+const selectIncident = useCallback((incident: SafetyIncident | null) => dispatch({ type: 'SELECT_INCIDENT', payload: incident }), []);
+const openIngestionModal = useCallback(() => dispatch({ type: 'OPEN_INGESTION_MODAL' }), []);
+const closeIngestionModal = useCallback(() => dispatch({ type: 'CLOSE_INGESTION_MODAL' }), []);
+const openOverrideModal = useCallback(() => dispatch({ type: 'OPEN_OVERRIDE_MODAL' }), []);
+const closeOverrideModal = useCallback(() => dispatch({ type: 'CLOSE_OVERRIDE_MODAL' }), []);
 
-  const confirmAndEscalate = useCallback(async (incidentId: string, officerName?: string, notes?: string) => {
-    const name = officerName || 'Administrator';
-    dispatch({
-      type: 'CONFIRM_AND_ESCALATE',
-      payload: { incidentId, officerName: name, notes },
-    });
-    if (!isDemoMode) {
-      try {
-        await apiClient.confirmIncident(incidentId, name, notes);
-        await refreshIncidents();
-      } catch (err) {
-        console.warn('[SafetyContext] Backend confirmIncident failed, local state retained:', err);
-      }
+const confirmAndEscalate = useCallback(async (incidentId: string, officerName?: string, notes?: string) => {
+  const name = officerName || 'Administrator';
+  dispatch({
+    type: 'CONFIRM_AND_ESCALATE',
+    payload: { incidentId, officerName: name, notes },
+  });
+  if (!isDemoMode) {
+    try {
+      await apiClient.confirmIncident(incidentId, name, notes);
+      await refreshIncidents();
+    } catch (err) {
+      console.warn('[SafetyContext] Backend confirmIncident failed, local state retained:', err);
     }
-  }, [refreshIncidents, isDemoMode]);
+  }
+}, [refreshIncidents, isDemoMode]);
 
-  const overrideIncident = useCallback(async (incidentId: string, justification: string, officerName?: string) => {
-    const name = officerName || 'Administrator';
-    dispatch({
-      type: 'OVERRIDE_INCIDENT',
-      payload: { incidentId, justification, officerName: name },
-    });
-    if (!isDemoMode) {
-      try {
-        await apiClient.overrideIncident(incidentId, name, justification);
-        await refreshIncidents();
-      } catch (err) {
-        console.warn('[SafetyContext] Backend overrideIncident failed, local state retained:', err);
-      }
+const overrideIncident = useCallback(async (incidentId: string, justification: string, officerName?: string) => {
+  const name = officerName || 'Administrator';
+  dispatch({
+    type: 'OVERRIDE_INCIDENT',
+    payload: { incidentId, justification, officerName: name },
+  });
+  if (!isDemoMode) {
+    try {
+      await apiClient.overrideIncident(incidentId, name, justification);
+      await refreshIncidents();
+    } catch (err) {
+      console.warn('[SafetyContext] Backend overrideIncident failed, local state retained:', err);
     }
-  }, [refreshIncidents, isDemoMode]);
+  }
+}, [refreshIncidents, isDemoMode]);
 
-  const addIncident = useCallback((incident: Omit<SafetyIncident, 'id' | 'timestamp' | 'validationStatus'>) => {
-    dispatch({ type: 'ADD_INCIDENT', payload: incident });
-  }, []);
+const addIncident = useCallback((incident: Omit<SafetyIncident, 'id' | 'timestamp' | 'validationStatus'>) => {
+  dispatch({ type: 'ADD_INCIDENT', payload: incident });
+}, []);
 
-  const addBatchIncidents = useCallback((incidents: SafetyIncident[]) => {
-    dispatch({ type: 'ADD_BATCH_INCIDENTS', payload: incidents });
-  }, []);
+const addBatchIncidents = useCallback((incidents: SafetyIncident[]) => {
+  dispatch({ type: 'ADD_BATCH_INCIDENTS', payload: incidents });
+}, []);
 
-  const commitDatasetIngestion = useCallback((payload: { incidents: SafetyIncident[]; dataset?: Dataset }) => {
+const commitDatasetIngestion = useCallback(
+  (payload: { incidents: SafetyIncident[]; dataset?: Dataset }) => {
     dispatch({ type: 'COMMIT_DATASET_INGESTION', payload });
-  }, []);
+    if (isDemoMode) {
+      if (payload.dataset) {
+        const existingDs = getDemoDatasetsFromStorage();
+        const updatedDs = [
+          payload.dataset,
+          ...existingDs.filter((d) => d.id !== payload.dataset!.id),
+        ];
+        saveDemoDatasetsToStorage(updatedDs);
+      }
+      if (payload.incidents && payload.incidents.length > 0) {
+        const existingInc = getDemoIncidentsFromStorage();
+        const newIds = new Set(payload.incidents.map((i) => i.id));
+        const updatedInc = [
+          ...payload.incidents,
+          ...existingInc.filter((i) => !newIds.has(i.id)),
+        ];
+        saveDemoIncidentsToStorage(updatedInc);
+      }
+    }
+  },
+  [isDemoMode]
+);
 
-  const addDataset = useCallback((dataset: Dataset) => {
-    dispatch({ type: 'ADD_DATASET', payload: dataset });
-  }, []);
+const addDataset = useCallback((dataset: Dataset) => {
+  dispatch({ type: 'ADD_DATASET', payload: dataset });
+}, []);
 
-  const removeDataset = useCallback((datasetId: string) => {
+const removeDataset = useCallback(
+  (datasetId: string) => {
     dispatch({ type: 'REMOVE_DATASET', payload: { datasetId } });
-  }, []);
+    if (isDemoMode) {
+      const existingDs = getDemoDatasetsFromStorage();
+      const updatedDs = existingDs.filter((d) => d.id !== datasetId);
+      saveDemoDatasetsToStorage(updatedDs);
+    }
+  },
+  [isDemoMode]
+);
 
-  const removeDatasetIncidents = useCallback((datasetId: string) => {
+const removeDatasetIncidents = useCallback(
+  (datasetId: string) => {
     dispatch({ type: 'REMOVE_DATASET_INCIDENTS', payload: { datasetId } });
-  }, []);
+    if (isDemoMode) {
+      const existingInc = getDemoIncidentsFromStorage();
+      const updatedInc = existingInc.filter((i) => i.datasetId !== datasetId);
+      saveDemoIncidentsToStorage(updatedInc);
+    }
+  },
+  [isDemoMode]
+);
 
-  const value = useMemo<SafetyContextType>(
-    () => ({
-      incidents: state.incidents,
-      datasets: state.datasets,
-      selectedIncident: state.selectedIncident,
-      filter: state.filter,
-      searchQuery: state.searchQuery,
-      kpiMetrics,
-      isIngestionModalOpen: state.isIngestionModalOpen,
-      isOverrideModalOpen: state.isOverrideModalOpen,
-      setFilter,
-      setSearchQuery,
-      selectIncident,
-      confirmAndEscalate,
-      overrideIncident,
-      addIncident,
-      addBatchIncidents,
-      commitDatasetIngestion,
-      addDataset,
-      removeDataset,
-      refreshDatasets,
-      refreshIncidents,
-      removeDatasetIncidents,
-      openIngestionModal,
-      closeIngestionModal,
-      openOverrideModal,
-      closeOverrideModal,
-      isLoading: state.isLoading,
-    }),
-    [
-      state.incidents,
-      state.datasets,
-      state.selectedIncident,
-      state.filter,
-      state.searchQuery,
-      state.isIngestionModalOpen,
-      state.isOverrideModalOpen,
-      state.isLoading,
-      kpiMetrics,
-      setFilter,
-      setSearchQuery,
-      selectIncident,
-      confirmAndEscalate,
-      overrideIncident,
-      addIncident,
-      addBatchIncidents,
-      commitDatasetIngestion,
-      addDataset,
-      removeDataset,
-      removeDatasetIncidents,
-      refreshDatasets,
-      refreshIncidents,
-      openIngestionModal,
-      closeIngestionModal,
-      openOverrideModal,
-      closeOverrideModal,
-    ]
-  );
+const updateIncidentLsr = useCallback(
+  (
+    incidentId: string,
+    lsrCategory: LSRCode,
+    lsrTitle: string,
+    lsrViolations?: LSRViolation[]
+  ) => {
+    dispatch({
+      type: 'UPDATE_INCIDENT_LSR',
+      payload: { incidentId, lsrCategory, lsrTitle, lsrViolations },
+    });
+    if (isDemoMode) {
+      const existingInc = getDemoIncidentsFromStorage();
+      if (existingInc.some((i) => i.id === incidentId)) {
+        const updatedInc = existingInc.map((i) =>
+          i.id === incidentId
+            ? {
+                ...i,
+                lsrCategory,
+                lsrTitle,
+                lsrViolations: lsrViolations || [
+                  {
+                    code: lsrCategory,
+                    label: lsrTitle.replace(/^LSR-\d+:\s*/, ''),
+                    description: `Supervisory reclassification to ${lsrTitle}.`,
+                  },
+                ],
+              }
+            : i
+        );
+        saveDemoIncidentsToStorage(updatedInc);
+      }
+    }
+  },
+  [isDemoMode]
+);
+
+const dispatchAdvisory = useCallback(
+  (
+    incidentId: string,
+    recipient: string,
+    officer: string,
+    subject?: string
+  ) => {
+    dispatch({
+      type: 'DISPATCH_ADVISORY',
+      payload: { incidentId, recipient, officer, subject },
+    });
+    if (isDemoMode) {
+      const existingInc = getDemoIncidentsFromStorage();
+      if (existingInc.some((i) => i.id === incidentId)) {
+        const now = new Date().toLocaleString('en-IN', {
+          timeZone: 'Asia/Kolkata',
+          hour12: false,
+        }) + ' IST';
+        const updatedInc = existingInc.map((i) =>
+          i.id === incidentId
+            ? {
+                ...i,
+                dispatchedAdvisory: { sentAt: now, recipient, officer, subject },
+              }
+            : i
+        );
+        saveDemoIncidentsToStorage(updatedInc);
+      }
+    }
+  },
+  [isDemoMode]
+);
+
+const value = useMemo<SafetyContextType>(
+  () => ({
+    incidents: state.incidents,
+    datasets: state.datasets,
+    selectedIncident: state.selectedIncident,
+    filter: state.filter,
+    searchQuery: state.searchQuery,
+    kpiMetrics,
+    isIngestionModalOpen: state.isIngestionModalOpen,
+    isOverrideModalOpen: state.isOverrideModalOpen,
+    setFilter,
+    setSearchQuery,
+    selectIncident,
+    confirmAndEscalate,
+    overrideIncident,
+    updateIncidentLsr,
+    dispatchAdvisory,
+    addIncident,
+    addBatchIncidents,
+    commitDatasetIngestion,
+    addDataset,
+    removeDataset,
+    refreshDatasets,
+    refreshIncidents,
+    removeDatasetIncidents,
+    openIngestionModal,
+    closeIngestionModal,
+    openOverrideModal,
+    closeOverrideModal,
+    isLoading: state.isLoading,
+  }),
+  [
+    state.incidents,
+    state.datasets,
+    state.selectedIncident,
+    state.filter,
+    state.searchQuery,
+    state.isIngestionModalOpen,
+    state.isOverrideModalOpen,
+    state.isLoading,
+    kpiMetrics,
+    setFilter,
+    setSearchQuery,
+    selectIncident,
+    confirmAndEscalate,
+    overrideIncident,
+    updateIncidentLsr,
+    dispatchAdvisory,
+    addIncident,
+    addBatchIncidents,
+    commitDatasetIngestion,
+    addDataset,
+    removeDataset,
+    removeDatasetIncidents,
+    refreshDatasets,
+    refreshIncidents,
+    openIngestionModal,
+    closeIngestionModal,
+    openOverrideModal,
+    closeOverrideModal,
+  ]
+);
 
 
-  return <SafetyContext.Provider value={value}>{children}</SafetyContext.Provider>;
+return <SafetyContext.Provider value={value}>{children}</SafetyContext.Provider>;
 }
 
 export function useSafety() {

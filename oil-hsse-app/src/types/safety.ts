@@ -87,6 +87,12 @@ export interface SafetyIncident {
   overrideJustification?: string;
   escalationNotes?: string;
   datasetId?: string;
+  dispatchedAdvisory?: {
+    sentAt: string;
+    recipient: string;
+    officer: string;
+    subject?: string;
+  };
 }
 
 // Backward-compatible alias for existing imports
@@ -116,6 +122,18 @@ export interface SafetyContextType {
   selectIncident: (incident: SafetyIncident | null) => void;
   confirmAndEscalate: (incidentId: string, officerName?: string, notes?: string) => Promise<void>;
   overrideIncident: (incidentId: string, justification: string, officerName?: string) => Promise<void>;
+  updateIncidentLsr: (
+    incidentId: string,
+    lsrCategory: LSRCode,
+    lsrTitle: string,
+    lsrViolations?: LSRViolation[]
+  ) => void;
+  dispatchAdvisory: (
+    incidentId: string,
+    recipient: string,
+    officer: string,
+    subject?: string
+  ) => void;
   addIncident: (incident: Omit<SafetyIncident, 'id' | 'timestamp' | 'validationStatus'>) => void;
   addBatchIncidents: (incidents: SafetyIncident[]) => void;
   commitDatasetIngestion: (payload: { incidents: SafetyIncident[]; dataset?: Dataset }) => void;

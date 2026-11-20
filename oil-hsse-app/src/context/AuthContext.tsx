@@ -519,6 +519,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (typeof window !== 'undefined') {
       try {
         sessionStorage.removeItem('oil_hsse_demo_session_active');
+        sessionStorage.removeItem('oil_hsse_demo_datasets');
+        sessionStorage.removeItem('oil_hsse_demo_incidents');
       } catch {}
     }
     setIsDemoMode(false);
